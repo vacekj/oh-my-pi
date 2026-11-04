@@ -50,6 +50,7 @@ import type { CodexAutoRedeemCoordinator } from "./codex-auto-reset";
 import type { SettingsGatedToolDelta } from "./session-tools";
 import type { CostGate } from "./cost-gate";
 import type { SessionManager } from "./session-manager";
+import type { SystemPromptDescription } from "../system-prompt-sources";
 
 /** Maximum time the interactive shutdown path waits for Mnemopi consolidation. */
 export const SHUTDOWN_CONSOLIDATE_BUDGET_MS = 1_500;
@@ -350,6 +351,8 @@ export interface AgentSessionConfig {
 		toolNames: string[],
 		tools: Map<string, AgentTool>,
 	) => Promise<{ systemPrompt: string[]; xdevCatalogNames?: readonly string[] }>;
+	/** Source manifest of a system prompt this session built; null when `prompt` is not one of its builds. */
+	describeSystemPrompt?: (prompt: readonly string[]) => SystemPromptDescription | null;
 	/** Tools mounted under `xd://`, for `/tools` display. */
 	getXdevToolEntries?: () => Array<{ name: string; summary: string }>;
 	/** `xd://` presentation state backed by the canonical tool map. */

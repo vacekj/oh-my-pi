@@ -429,12 +429,17 @@ export class InternalUrlRouter {
 
 	/** Rendered promptDoc lines, registration order, for schemes available under `host`. */
 	describe(host: SchemeHost): string[] {
-		const lines: string[] = [];
-		for (const handler of this.#handlers.values()) {
+		return this.describeEntries(host).map(entry => entry.line);
+	}
+
+	/** {@link describe} with the scheme each line documents. */
+	describeEntries(host: SchemeHost): Array<{ scheme: string; line: string }> {
+		const entries: Array<{ scheme: string; line: string }> = [];
+		for (const [scheme, handler] of this.#handlers) {
 			const line = handler.promptDoc?.(host);
-			if (line !== undefined) lines.push(line);
+			if (line !== undefined) entries.push({ scheme, line });
 		}
-		return lines;
+		return entries;
 	}
 
 	#isResourceFallbackScheme(scheme: string): boolean {
