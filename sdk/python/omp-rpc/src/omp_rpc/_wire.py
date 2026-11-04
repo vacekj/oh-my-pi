@@ -129,6 +129,11 @@ _SUBAGENT_STATUS_VALUES: Final[frozenset[str]] = frozenset({"pending", "running"
 _decode_subagent_status = cast("Decoder[SubagentStatus]", literal(_SUBAGENT_STATUS_VALUES))
 
 
+SystemPromptSourceKind: TypeAlias = Literal["custom-prompt", "system-md", "personality", "skill", "always-apply-rule", "rule", "internal-url", "tool", "tool-inventory", "xdev-docs", "workstation", "model", "context-file", "nested-context", "workspace-tree", "workspace-root", "repo-context", "append", "user-append", "eval-prelude"]
+_SYSTEM_PROMPT_SOURCE_KIND_VALUES: Final[frozenset[str]] = frozenset({"custom-prompt", "system-md", "personality", "skill", "always-apply-rule", "rule", "internal-url", "tool", "tool-inventory", "xdev-docs", "workstation", "model", "context-file", "nested-context", "workspace-tree", "workspace-root", "repo-context", "append", "user-append", "eval-prelude"})
+_decode_system_prompt_source_kind = cast("Decoder[SystemPromptSourceKind]", literal(_SYSTEM_PROMPT_SOURCE_KIND_VALUES))
+
+
 SlowModeScope: TypeAlias = Literal["session", "global"]
 """Where `/slow` lives: persisted config shared by every session, or this session's flex tier."""
 _SLOW_MODE_SCOPE_VALUES: Final[frozenset[str]] = frozenset({"session", "global"})
@@ -577,6 +582,73 @@ class ContextUsage:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class SystemPromptSourceInfo:
+    """An input of the system prompt and where it came from."""
+    id: str
+    """Stable per input across rebuilds (`context-file:<path>`, `skill:<name>`)."""
+    kind: SystemPromptSourceKind
+    label: str
+    path: str | None = None
+    """File the text was read from."""
+    level: Literal["user", "project", "native"] | None = None
+    depth: int | None = None
+    """Distance of a project context file from the cwd (0 = the cwd)."""
+    provider: str | None = None
+    """Discovery provider that loaded the file."""
+    setting: str | None = None
+    """Setting id that controls the input."""
+    value: str | None = None
+    """That setting's value, when it selects between variants."""
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class SystemPromptSource:
+    """An input located in the prompt: `systemPrompt[block].slice(start, end)` is its text."""
+    id: str
+    kind: SystemPromptSourceKind
+    label: str
+    block: int
+    start: int
+    end: int
+    path: str | None = None
+    level: Literal["user", "project", "native"] | None = None
+    depth: int | None = None
+    provider: str | None = None
+    setting: str | None = None
+    value: str | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class SystemPromptTemplate:
+    kind: Literal["bundled", "custom-prompt", "template"]
+    path: str | None = None
+    """Template or prompt file; absent for the bundled template and literal text."""
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class SystemPromptGate:
+    """A value the template's conditionals read, and the setting it came from."""
+    name: str
+    value: str
+    """The value as text (`true`, `3`, `eager`)."""
+    setting: str | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class SystemPromptSources:
+    """Which input produced which text of `systemPrompt`. Text no source covers is the template's own."""
+    template: SystemPromptTemplate
+    tools: tuple[str, ...]
+    """Active tool names, the inputs of the template's tool sections."""
+    gates: tuple[SystemPromptGate, ...]
+    sources: tuple[SystemPromptSource, ...]
+    unlocated: tuple[SystemPromptSourceInfo, ...]
+    """Inputs that reached the prompt but whose text could not be located exactly."""
+    built_blocks: int
+    """Blocks from this index on were added after the build (memory recall)."""
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class QueuedMessagesState:
     """Displayable queue-chip text for pending user-authored messages; accepted verbatim by `remove_queued_message`."""
     steering: tuple[str, ...]
@@ -676,6 +748,8 @@ class SessionState:
     todo_phases: tuple[TodoPhase, ...] = ()
     system_prompt: tuple[str, ...] = ()
     """System prompt sections, for session dumps."""
+    system_prompt_sources: SystemPromptSources | None = None
+    """Source manifest of `systemPrompt`; null when the live prompt is not one the session built (an extension replaced it)."""
     dump_tools: tuple[ToolDescriptor, ...] = ()
     context_usage: ContextUsage | None = None
     goal: GoalModeState | None = None
@@ -1960,6 +2034,68 @@ def parse_context_usage(value: object, path: str = "ContextUsage") -> ContextUsa
     )
 
 
+def parse_system_prompt_source_info(value: object, path: str = "SystemPromptSourceInfo") -> SystemPromptSourceInfo:
+    payload = expect_object(value, path)
+    return SystemPromptSourceInfo(
+        id=required(payload, "id", decode_str, path),
+        kind=required(payload, "kind", _decode_system_prompt_source_kind, path),
+        label=required(payload, "label", decode_str, path),
+        path=optional(payload, "path", decode_str, path),
+        level=optional(payload, "level", cast('Decoder[Literal["user", "project", "native"]]', literal(frozenset({"user", "project", "native"}))), path),
+        depth=optional(payload, "depth", decode_int, path),
+        provider=optional(payload, "provider", decode_str, path),
+        setting=optional(payload, "setting", decode_str, path),
+        value=optional(payload, "value", decode_str, path),
+    )
+
+
+def parse_system_prompt_source(value: object, path: str = "SystemPromptSource") -> SystemPromptSource:
+    payload = expect_object(value, path)
+    return SystemPromptSource(
+        id=required(payload, "id", decode_str, path),
+        kind=required(payload, "kind", _decode_system_prompt_source_kind, path),
+        label=required(payload, "label", decode_str, path),
+        block=required(payload, "block", decode_int, path),
+        start=required(payload, "start", decode_int, path),
+        end=required(payload, "end", decode_int, path),
+        path=optional(payload, "path", decode_str, path),
+        level=optional(payload, "level", cast('Decoder[Literal["user", "project", "native"]]', literal(frozenset({"user", "project", "native"}))), path),
+        depth=optional(payload, "depth", decode_int, path),
+        provider=optional(payload, "provider", decode_str, path),
+        setting=optional(payload, "setting", decode_str, path),
+        value=optional(payload, "value", decode_str, path),
+    )
+
+
+def parse_system_prompt_template(value: object, path: str = "SystemPromptTemplate") -> SystemPromptTemplate:
+    payload = expect_object(value, path)
+    return SystemPromptTemplate(
+        kind=required(payload, "kind", cast('Decoder[Literal["bundled", "custom-prompt", "template"]]', literal(frozenset({"bundled", "custom-prompt", "template"}))), path),
+        path=optional(payload, "path", decode_str, path),
+    )
+
+
+def parse_system_prompt_gate(value: object, path: str = "SystemPromptGate") -> SystemPromptGate:
+    payload = expect_object(value, path)
+    return SystemPromptGate(
+        name=required(payload, "name", decode_str, path),
+        value=required(payload, "value", decode_str, path),
+        setting=optional(payload, "setting", decode_str, path),
+    )
+
+
+def parse_system_prompt_sources(value: object, path: str = "SystemPromptSources") -> SystemPromptSources:
+    payload = expect_object(value, path)
+    return SystemPromptSources(
+        template=required(payload, "template", parse_system_prompt_template, path),
+        tools=required(payload, "tools", array(decode_str), path),
+        gates=required(payload, "gates", array(parse_system_prompt_gate), path),
+        sources=required(payload, "sources", array(parse_system_prompt_source), path),
+        unlocated=required(payload, "unlocated", array(parse_system_prompt_source_info), path),
+        built_blocks=required(payload, "builtBlocks", decode_int, path),
+    )
+
+
 def parse_queued_messages_state(value: object, path: str = "QueuedMessagesState") -> QueuedMessagesState:
     payload = expect_object(value, path)
     return QueuedMessagesState(
@@ -2057,6 +2193,7 @@ def parse_session_state(value: object, path: str = "SessionState") -> SessionSta
         queued_messages=defaulted(payload, "queuedMessages", parse_queued_messages_state, path, parse_queued_messages_state({"steering": [], "followUp": [], "liveSteered": 0}, path)),
         todo_phases=defaulted(payload, "todoPhases", array(parse_todo_phase), path, ()),
         system_prompt=defaulted(payload, "systemPrompt", scalar_or_array(decode_str), path, ()),
+        system_prompt_sources=optional(payload, "systemPromptSources", nullable(parse_system_prompt_sources), path),
         dump_tools=defaulted(payload, "dumpTools", array(parse_tool_descriptor), path, ()),
         context_usage=optional(payload, "contextUsage", parse_context_usage, path),
         goal=defaulted(payload, "goal", nullable(parse_goal_mode_state), path, None),
@@ -4171,6 +4308,12 @@ __all__ = [
     "SubagentSnapshot",
     "SubagentStatus",
     "SubagentSubscriptionLevel",
+    "SystemPromptGate",
+    "SystemPromptSource",
+    "SystemPromptSourceInfo",
+    "SystemPromptSourceKind",
+    "SystemPromptSources",
+    "SystemPromptTemplate",
     "TextContent",
     "ThinkingConfig",
     "ThinkingContent",
@@ -4344,6 +4487,11 @@ __all__ = [
     "parse_subagent_progress_event",
     "parse_subagent_progress_payload",
     "parse_subagent_snapshot",
+    "parse_system_prompt_gate",
+    "parse_system_prompt_source",
+    "parse_system_prompt_source_info",
+    "parse_system_prompt_sources",
+    "parse_system_prompt_template",
     "parse_text_content",
     "parse_thinking_config",
     "parse_thinking_content",

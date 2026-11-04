@@ -2959,6 +2959,160 @@ pub struct ContextUsage {
 	pub percent: f64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SystemPromptSourceKind {
+	#[serde(rename = "custom-prompt")]
+	CustomPrompt,
+	#[serde(rename = "system-md")]
+	SystemMd,
+	#[serde(rename = "personality")]
+	Personality,
+	#[serde(rename = "skill")]
+	Skill,
+	#[serde(rename = "always-apply-rule")]
+	AlwaysApplyRule,
+	#[serde(rename = "rule")]
+	Rule,
+	#[serde(rename = "internal-url")]
+	InternalUrl,
+	#[serde(rename = "tool")]
+	Tool,
+	#[serde(rename = "tool-inventory")]
+	ToolInventory,
+	#[serde(rename = "xdev-docs")]
+	XdevDocs,
+	#[serde(rename = "workstation")]
+	Workstation,
+	#[serde(rename = "model")]
+	Model,
+	#[serde(rename = "context-file")]
+	ContextFile,
+	#[serde(rename = "nested-context")]
+	NestedContext,
+	#[serde(rename = "workspace-tree")]
+	WorkspaceTree,
+	#[serde(rename = "workspace-root")]
+	WorkspaceRoot,
+	#[serde(rename = "repo-context")]
+	RepoContext,
+	#[serde(rename = "append")]
+	Append,
+	#[serde(rename = "user-append")]
+	UserAppend,
+	#[serde(rename = "eval-prelude")]
+	EvalPrelude,
+}
+
+impl SystemPromptSourceKind {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::CustomPrompt => "custom-prompt",
+			Self::SystemMd => "system-md",
+			Self::Personality => "personality",
+			Self::Skill => "skill",
+			Self::AlwaysApplyRule => "always-apply-rule",
+			Self::Rule => "rule",
+			Self::InternalUrl => "internal-url",
+			Self::Tool => "tool",
+			Self::ToolInventory => "tool-inventory",
+			Self::XdevDocs => "xdev-docs",
+			Self::Workstation => "workstation",
+			Self::Model => "model",
+			Self::ContextFile => "context-file",
+			Self::NestedContext => "nested-context",
+			Self::WorkspaceTree => "workspace-tree",
+			Self::WorkspaceRoot => "workspace-root",
+			Self::RepoContext => "repo-context",
+			Self::Append => "append",
+			Self::UserAppend => "user-append",
+			Self::EvalPrelude => "eval-prelude",
+		}
+	}
+}
+
+/// An input of the system prompt and where it came from.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SystemPromptSourceInfo {
+	/// Stable per input across rebuilds (`context-file:<path>`, `skill:<name>`).
+	pub id: String,
+	pub kind: SystemPromptSourceKind,
+	pub label: String,
+	/// File the text was read from.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub path: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub level: Option<SystemPromptSourceInfoLevel>,
+	/// Distance of a project context file from the cwd (0 = the cwd).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub depth: Option<i64>,
+	/// Discovery provider that loaded the file.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub provider: Option<String>,
+	/// Setting id that controls the input.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub setting: Option<String>,
+	/// That setting's value, when it selects between variants.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub value: Option<String>,
+}
+
+/// An input located in the prompt: `systemPrompt[block].slice(start, end)` is its text.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SystemPromptSource {
+	pub id: String,
+	pub kind: SystemPromptSourceKind,
+	pub label: String,
+	pub block: i64,
+	pub start: i64,
+	pub end: i64,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub path: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub level: Option<SystemPromptSourceLevel>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub depth: Option<i64>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub provider: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub setting: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub value: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SystemPromptTemplate {
+	pub kind: SystemPromptTemplateKind,
+	/// Template or prompt file; absent for the bundled template and literal text.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub path: Option<String>,
+}
+
+/// A value the template's conditionals read, and the setting it came from.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SystemPromptGate {
+	pub name: String,
+	/// The value as text (`true`, `3`, `eager`).
+	pub value: String,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub setting: Option<String>,
+}
+
+/// Which input produced which text of `systemPrompt`. Text no source covers is the template's own.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SystemPromptSources {
+	pub template: SystemPromptTemplate,
+	/// Active tool names, the inputs of the template's tool sections.
+	pub tools: Vec<String>,
+	pub gates: Vec<SystemPromptGate>,
+	pub sources: Vec<SystemPromptSource>,
+	/// Inputs that reached the prompt but whose text could not be located exactly.
+	pub unlocated: Vec<SystemPromptSourceInfo>,
+	/// Blocks from this index on were added after the build (memory recall).
+	#[serde(rename = "builtBlocks")]
+	pub built_blocks: i64,
+}
+
 /// Displayable queue-chip text for pending user-authored messages; accepted verbatim by `remove_queued_message`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct QueuedMessagesState {
@@ -3155,6 +3309,9 @@ pub struct SessionState {
 	/// System prompt sections, for session dumps.
 	#[serde(rename = "systemPrompt", default = "default_session_state_system_prompt", deserialize_with = "scalar_or_array")]
 	pub system_prompt: Vec<String>,
+	/// Source manifest of `systemPrompt`; null when the live prompt is not one the session built (an extension replaced it).
+	#[serde(rename = "systemPromptSources", default, skip_serializing_if = "Option::is_none")]
+	pub system_prompt_sources: Option<SystemPromptSources>,
 	#[serde(rename = "dumpTools", default = "default_session_state_dump_tools")]
 	pub dump_tools: Vec<ToolDescriptor>,
 	#[serde(rename = "contextUsage", default, skip_serializing_if = "Option::is_none")]
@@ -5917,6 +6074,69 @@ impl AssistantErrorEventReason {
 		match self {
 			Self::Aborted => "aborted",
 			Self::Error => "error",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SystemPromptSourceInfoLevel {
+	#[serde(rename = "user")]
+	User,
+	#[serde(rename = "project")]
+	Project,
+	#[serde(rename = "native")]
+	Native,
+}
+
+impl SystemPromptSourceInfoLevel {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::User => "user",
+			Self::Project => "project",
+			Self::Native => "native",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SystemPromptSourceLevel {
+	#[serde(rename = "user")]
+	User,
+	#[serde(rename = "project")]
+	Project,
+	#[serde(rename = "native")]
+	Native,
+}
+
+impl SystemPromptSourceLevel {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::User => "user",
+			Self::Project => "project",
+			Self::Native => "native",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SystemPromptTemplateKind {
+	#[serde(rename = "bundled")]
+	Bundled,
+	#[serde(rename = "custom-prompt")]
+	CustomPrompt,
+	#[serde(rename = "template")]
+	Template,
+}
+
+impl SystemPromptTemplateKind {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Bundled => "bundled",
+			Self::CustomPrompt => "custom-prompt",
+			Self::Template => "template",
 		}
 	}
 }

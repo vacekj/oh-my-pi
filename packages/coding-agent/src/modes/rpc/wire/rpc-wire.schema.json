@@ -2424,6 +2424,222 @@
 				"percent"
 			]
 		},
+		"SystemPromptSourceKind": {
+			"enum": [
+				"custom-prompt",
+				"system-md",
+				"personality",
+				"skill",
+				"always-apply-rule",
+				"rule",
+				"internal-url",
+				"tool",
+				"tool-inventory",
+				"xdev-docs",
+				"workstation",
+				"model",
+				"context-file",
+				"nested-context",
+				"workspace-tree",
+				"workspace-root",
+				"repo-context",
+				"append",
+				"user-append",
+				"eval-prelude"
+			],
+			"type": "string"
+		},
+		"SystemPromptSourceInfo": {
+			"type": "object",
+			"properties": {
+				"id": {
+					"type": "string",
+					"description": "Stable per input across rebuilds (`context-file:<path>`, `skill:<name>`)."
+				},
+				"kind": {
+					"$ref": "#/$defs/SystemPromptSourceKind"
+				},
+				"label": {
+					"type": "string"
+				},
+				"path": {
+					"type": "string",
+					"description": "File the text was read from."
+				},
+				"level": {
+					"enum": [
+						"user",
+						"project",
+						"native"
+					],
+					"type": "string"
+				},
+				"depth": {
+					"type": "integer",
+					"description": "Distance of a project context file from the cwd (0 = the cwd)."
+				},
+				"provider": {
+					"type": "string",
+					"description": "Discovery provider that loaded the file."
+				},
+				"setting": {
+					"type": "string",
+					"description": "Setting id that controls the input."
+				},
+				"value": {
+					"type": "string",
+					"description": "That setting's value, when it selects between variants."
+				}
+			},
+			"required": [
+				"id",
+				"kind",
+				"label"
+			],
+			"description": "An input of the system prompt and where it came from."
+		},
+		"SystemPromptSource": {
+			"type": "object",
+			"properties": {
+				"id": {
+					"type": "string"
+				},
+				"kind": {
+					"$ref": "#/$defs/SystemPromptSourceKind"
+				},
+				"label": {
+					"type": "string"
+				},
+				"block": {
+					"type": "integer"
+				},
+				"start": {
+					"type": "integer"
+				},
+				"end": {
+					"type": "integer"
+				},
+				"path": {
+					"type": "string"
+				},
+				"level": {
+					"enum": [
+						"user",
+						"project",
+						"native"
+					],
+					"type": "string"
+				},
+				"depth": {
+					"type": "integer"
+				},
+				"provider": {
+					"type": "string"
+				},
+				"setting": {
+					"type": "string"
+				},
+				"value": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"id",
+				"kind",
+				"label",
+				"block",
+				"start",
+				"end"
+			],
+			"description": "An input located in the prompt: `systemPrompt[block].slice(start, end)` is its text."
+		},
+		"SystemPromptTemplate": {
+			"type": "object",
+			"properties": {
+				"kind": {
+					"enum": [
+						"bundled",
+						"custom-prompt",
+						"template"
+					],
+					"type": "string"
+				},
+				"path": {
+					"type": "string",
+					"description": "Template or prompt file; absent for the bundled template and literal text."
+				}
+			},
+			"required": [
+				"kind"
+			]
+		},
+		"SystemPromptGate": {
+			"type": "object",
+			"properties": {
+				"name": {
+					"type": "string"
+				},
+				"value": {
+					"type": "string",
+					"description": "The value as text (`true`, `3`, `eager`)."
+				},
+				"setting": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"name",
+				"value"
+			],
+			"description": "A value the template's conditionals read, and the setting it came from."
+		},
+		"SystemPromptSources": {
+			"type": "object",
+			"properties": {
+				"template": {
+					"$ref": "#/$defs/SystemPromptTemplate"
+				},
+				"tools": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"description": "Active tool names, the inputs of the template's tool sections."
+				},
+				"gates": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/SystemPromptGate"
+					}
+				},
+				"sources": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/SystemPromptSource"
+					}
+				},
+				"unlocated": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/SystemPromptSourceInfo"
+					},
+					"description": "Inputs that reached the prompt but whose text could not be located exactly."
+				},
+				"builtBlocks": {
+					"type": "integer",
+					"description": "Blocks from this index on were added after the build (memory recall)."
+				}
+			},
+			"required": [
+				"template",
+				"tools",
+				"gates",
+				"sources",
+				"unlocated",
+				"builtBlocks"
+			],
+			"description": "Which input produced which text of `systemPrompt`. Text no source covers is the template's own."
+		},
 		"QueuedMessagesState": {
 			"type": "object",
 			"properties": {
@@ -2748,6 +2964,17 @@
 					"description": "System prompt sections, for session dumps.",
 					"default": [],
 					"x-scalar-or-array": true
+				},
+				"systemPromptSources": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/SystemPromptSources"
+						},
+						{
+							"type": "null"
+						}
+					],
+					"description": "Source manifest of `systemPrompt`; null when the live prompt is not one the session built (an extension replaced it)."
 				},
 				"dumpTools": {
 					"type": "array",

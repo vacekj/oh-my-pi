@@ -1741,6 +1741,16 @@ export async function buildSessionOptions(
 	applyResolvedSystemPromptInputs(options, resolvedSystemPrompt, resolvedAppendPrompt);
 	if (resolvedSystemPromptTemplate !== undefined) {
 		options.systemPromptTemplate = resolvedSystemPromptTemplate;
+		options.systemPromptTemplatePath = templatePath;
+	}
+	// resolvePromptInput returns a literal unchanged and a readable path's contents.
+	if (options.customSystemPrompt !== undefined && systemPromptSource !== undefined) {
+		if (discoveredOverride?.kind === "text" || resolvedSystemPrompt !== systemPromptSource) {
+			options.customSystemPromptPath = systemPromptSource;
+		}
+	}
+	if (options.appendSystemPrompt !== undefined && appendPromptSource && resolvedAppendPrompt !== appendPromptSource) {
+		options.appendSystemPromptPath = appendPromptSource;
 	}
 	// Replan-driven title refresh resolves the override from this same field on
 	// `AgentSession`, so threading it through `CreateAgentSessionOptions` keeps

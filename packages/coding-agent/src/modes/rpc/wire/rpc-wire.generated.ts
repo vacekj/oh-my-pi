@@ -425,6 +425,70 @@ export interface ContextUsage {
 	percent: number;
 }
 
+export type SystemPromptSourceKind = "custom-prompt" | "system-md" | "personality" | "skill" | "always-apply-rule" | "rule" | "internal-url" | "tool" | "tool-inventory" | "xdev-docs" | "workstation" | "model" | "context-file" | "nested-context" | "workspace-tree" | "workspace-root" | "repo-context" | "append" | "user-append" | "eval-prelude";
+
+/** An input of the system prompt and where it came from. */
+export interface SystemPromptSourceInfo {
+	/** Stable per input across rebuilds (`context-file:<path>`, `skill:<name>`). */
+	id: string;
+	kind: SystemPromptSourceKind;
+	label: string;
+	/** File the text was read from. */
+	path?: string;
+	level?: "user" | "project" | "native";
+	/** Distance of a project context file from the cwd (0 = the cwd). */
+	depth?: number;
+	/** Discovery provider that loaded the file. */
+	provider?: string;
+	/** Setting id that controls the input. */
+	setting?: string;
+	/** That setting's value, when it selects between variants. */
+	value?: string;
+}
+
+/** An input located in the prompt: `systemPrompt[block].slice(start, end)` is its text. */
+export interface SystemPromptSource {
+	id: string;
+	kind: SystemPromptSourceKind;
+	label: string;
+	block: number;
+	start: number;
+	end: number;
+	path?: string;
+	level?: "user" | "project" | "native";
+	depth?: number;
+	provider?: string;
+	setting?: string;
+	value?: string;
+}
+
+export interface SystemPromptTemplate {
+	kind: "bundled" | "custom-prompt" | "template";
+	/** Template or prompt file; absent for the bundled template and literal text. */
+	path?: string;
+}
+
+/** A value the template's conditionals read, and the setting it came from. */
+export interface SystemPromptGate {
+	name: string;
+	/** The value as text (`true`, `3`, `eager`). */
+	value: string;
+	setting?: string;
+}
+
+/** Which input produced which text of `systemPrompt`. Text no source covers is the template's own. */
+export interface SystemPromptSources {
+	template: SystemPromptTemplate;
+	/** Active tool names, the inputs of the template's tool sections. */
+	tools: string[];
+	gates: SystemPromptGate[];
+	sources: SystemPromptSource[];
+	/** Inputs that reached the prompt but whose text could not be located exactly. */
+	unlocated: SystemPromptSourceInfo[];
+	/** Blocks from this index on were added after the build (memory recall). */
+	builtBlocks: number;
+}
+
 /** Displayable queue-chip text for pending user-authored messages; accepted verbatim by `remove_queued_message`. */
 export interface QueuedMessagesState {
 	steering: string[];
@@ -523,6 +587,8 @@ export interface SessionState {
 	todoPhases?: TodoPhase[];
 	/** System prompt sections, for session dumps. */
 	systemPrompt?: string[];
+	/** Source manifest of `systemPrompt`; null when the live prompt is not one the session built (an extension replaced it). */
+	systemPromptSources?: SystemPromptSources | null;
 	dumpTools?: ToolDescriptor[];
 	contextUsage?: ContextUsage;
 	/** Current goal mode; null when the session has no goal. */

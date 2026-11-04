@@ -39,6 +39,61 @@ export const stateDefs = {
 	},
 	TodoPhase: { name: "string", tasks: "TodoItem[]" },
 	ContextUsage: { tokens: "number.integer", contextWindow: "number.integer", percent: "number" },
+	SystemPromptSourceKind:
+		"'custom-prompt' | 'system-md' | 'personality' | 'skill' | 'always-apply-rule' | 'rule' | 'internal-url' | 'tool' | 'tool-inventory' | 'xdev-docs' | 'workstation' | 'model' | 'context-file' | 'nested-context' | 'workspace-tree' | 'workspace-root' | 'repo-context' | 'append' | 'user-append' | 'eval-prelude'",
+	SystemPromptSourceInfo: doc(
+		{
+			id: doc("string", "Stable per input across rebuilds (`context-file:<path>`, `skill:<name>`)."),
+			kind: "SystemPromptSourceKind",
+			label: "string",
+			"path?": doc("string", "File the text was read from."),
+			"level?": "'user' | 'project' | 'native'",
+			"depth?": doc("number.integer", "Distance of a project context file from the cwd (0 = the cwd)."),
+			"provider?": doc("string", "Discovery provider that loaded the file."),
+			"setting?": doc("string", "Setting id that controls the input."),
+			"value?": doc("string", "That setting's value, when it selects between variants."),
+		},
+		"An input of the system prompt and where it came from.",
+	),
+	SystemPromptSource: doc(
+		{
+			id: "string",
+			kind: "SystemPromptSourceKind",
+			label: "string",
+			"path?": "string",
+			"level?": "'user' | 'project' | 'native'",
+			"depth?": "number.integer",
+			"provider?": "string",
+			"setting?": "string",
+			"value?": "string",
+			block: "number.integer",
+			start: "number.integer",
+			end: "number.integer",
+		},
+		"An input located in the prompt: `systemPrompt[block].slice(start, end)` is its text.",
+	),
+	SystemPromptTemplate: {
+		kind: "'bundled' | 'custom-prompt' | 'template'",
+		"path?": doc("string", "Template or prompt file; absent for the bundled template and literal text."),
+	},
+	SystemPromptGate: doc(
+		{ name: "string", value: doc("string", "The value as text (`true`, `3`, `eager`)."), "setting?": "string" },
+		"A value the template's conditionals read, and the setting it came from.",
+	),
+	SystemPromptSources: doc(
+		{
+			template: "SystemPromptTemplate",
+			tools: doc("string[]", "Active tool names, the inputs of the template's tool sections."),
+			gates: "SystemPromptGate[]",
+			sources: "SystemPromptSource[]",
+			unlocated: doc(
+				"SystemPromptSourceInfo[]",
+				"Inputs that reached the prompt but whose text could not be located exactly.",
+			),
+			builtBlocks: doc("number.integer", "Blocks from this index on were added after the build (memory recall)."),
+		},
+		"Which input produced which text of `systemPrompt`. Text no source covers is the template's own.",
+	),
 	QueuedMessagesState: doc(
 		{
 			steering: "string[]",
@@ -140,6 +195,10 @@ export const stateDefs = {
 		queuedMessages: absentAs("QueuedMessagesState", { steering: [], followUp: [], liveSteered: 0 }),
 		todoPhases: absentAs("TodoPhase[]", []),
 		systemPrompt: absentAs(doc("string[]", "System prompt sections, for session dumps."), []),
+		"systemPromptSources?": doc(
+			"SystemPromptSources | null",
+			"Source manifest of `systemPrompt`; null when the live prompt is not one the session built (an extension replaced it).",
+		),
 		dumpTools: absentAs("ToolDescriptor[]", []),
 		"contextUsage?": "ContextUsage",
 		goal: absentAs(doc("GoalModeState | null", "Current goal mode; null when the session has no goal."), null),

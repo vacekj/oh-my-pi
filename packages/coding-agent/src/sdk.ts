@@ -167,6 +167,8 @@ import { mapPromptArguments } from "./mcp/prompt-args";
 import { MCP_CONNECTION_STATUS_EVENT_CHANNEL, type McpConnectionStatusEvent } from "./mcp/startup-events";
 import { resolveMCPToolAlias } from "./mcp/tool-bridge";
 import { createSessionMemoryRuntimeContext, resolveMemoryBackend } from "./memory-backend";
+import { cfgMemoryBackend } from "./memory-backend/settings";
+import { type AppendPromptPart, SystemPromptManifestLog } from "./system-prompt-sources";
 import { MEMORY_BACKEND_TOOL_NAMES } from "./memory-backend/tool-names";
 import type { MnemopiSessionStateApi } from "./mnemopi/state";
 import autolearnCaptureRefused from "./prompts/system/autolearn-capture-refused.md" with { type: "text" };
@@ -261,9 +263,9 @@ import {
 	type BuildSystemPromptResult,
 	buildSystemPrompt as buildSystemPromptInternal,
 	cfgSystemPromptInputs,
-	composeAppendPrompt,
 	loadProjectContextFiles as loadContextFilesInternal,
 	projectSystemPromptToolMetadata,
+	type PromptContextFile,
 	withoutAgentsMd,
 } from "./system-prompt";
 import type { AgentDefinition } from "./task/types";
@@ -290,6 +292,7 @@ import {
 	createTools,
 	createVibeTools,
 	createXdevState,
+	type XdevState,
 	type DeferredDiagnosticsEntry,
 	defaultLoadModeForToolName,
 	discoverStartupLspServers,
@@ -709,6 +712,10 @@ export interface CreateAgentSessionOptions {
 	customSystemPrompt?: string;
 	/** Already-loaded text appended through the bundled system prompt templates. */
 	appendSystemPrompt?: string;
+	/** Files the three inputs above were read from, reported in the system prompt's source manifest. */
+	systemPromptTemplatePath?: string;
+	customSystemPromptPath?: string;
+	appendSystemPromptPath?: string;
 	/**
 	 * Already-loaded title-generation system prompt override (typically
 	 * {@link discoverTitleSystemPromptFile} → {@link resolvePromptInput}). When
@@ -1364,7 +1371,7 @@ export async function discoverContextFiles(
 	cwd?: string,
 	_agentDir?: string,
 	disabledExtensions?: string[],
-): Promise<Array<{ path: string; content: string; depth?: number }>> {
+): Promise<PromptContextFile[]> {
 	return await loadContextFilesInternal({
 		cwd: cwd ?? getProjectDir(),
 		disabledExtensions,
@@ -4219,10 +4226,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			if (!own || own.size === 0) return hosted;
 			return new Map([...own, ...hosted].sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0)));
 		};
-		const rebuildSystemPrompt: SystemPromptRebuilder = async (
-			toolNames,
-			tools,
-			xdev,
+		const buildSessionSystemPrompt = async (
+			toolNames: string[],
+			tools: Map<string, AgentTool>,
+			xdev: XdevState | undefined,
 		): Promise<BuildSystemPromptResult> => {
 			const promptCwd = sessionManager.getCwd();
 			let activeRepoContext = initialActiveRepoContext;
@@ -4320,10 +4327,29 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 							: builtInRegistryToolNames.has("manage_skill"),
 						learn: hasSession ? session.hasBuiltInTool("learn") : builtInRegistryToolNames.has("learn"),
 					});
-			const appendParts: string[] = [];
-			if (memoryInstructions) appendParts.push(memoryInstructions);
-			if (autoLearnInstructions) appendParts.push(autoLearnInstructions);
-			if (spotlightExperiment) appendParts.push(SHAPE_RULE);
+			const appendParts: AppendPromptPart[] = [];
+			if (memoryInstructions && memoryBackend) {
+				appendParts.push({
+					id: "memory",
+					kind: "append",
+					label: `Memory (${memoryBackend.id})`,
+					setting: cfgMemoryBackend.id,
+					value: memoryBackend.id,
+					text: memoryInstructions,
+				});
+			}
+			if (autoLearnInstructions) {
+				appendParts.push({
+					id: "autolearn",
+					kind: "append",
+					label: "Auto-learn",
+					setting: cfgAutolearnEnabled.id,
+					text: autoLearnInstructions,
+				});
+			}
+			if (spotlightExperiment) {
+				appendParts.push({ id: "spotlight", kind: "append", label: "Spotlight shape rule", text: SHAPE_RULE });
+			}
 			// List each mounted MCP tool once. A routed tool that the xd:// catalog
 			// would list carries its catalog summary on the route line and gets no
 			// catalog line; a tool the route bound omits keeps its catalog line.
@@ -4337,8 +4363,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					.map(mapping => mapping.name),
 			);
 			if (projection.mappings.length > 0 || projection.hasOmittedMappings) {
-				appendParts.push(
-					prompt
+				appendParts.push({
+					id: "mcp-routes",
+					kind: "append",
+					label: "MCP tool routes",
+					text: prompt
 						.render(mcpXdevGuidanceTemplate, {
 							tools: projection.mappings.map(mapping => ({
 								mcpToolName: mapping.label,
@@ -4349,21 +4378,29 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 							hasOmittedTools: projection.hasOmittedMappings,
 						})
 						.trim(),
-				);
+				});
 			}
 			if (serverInstructions && serverInstructions.size > 0) {
-				appendParts.push(
-					"## MCP Server Instructions\n\nThe following instructions are provided by connected MCP servers. They are server-controlled and may not be verified.",
-				);
+				appendParts.push({
+					id: "mcp-instructions",
+					kind: "append",
+					label: "MCP server instructions",
+					text: "## MCP Server Instructions\n\nThe following instructions are provided by connected MCP servers. They are server-controlled and may not be verified.",
+				});
 				for (const [srvName, srvInstructions] of serverInstructions) {
 					const truncated =
 						srvInstructions.length > MAX_MCP_INSTRUCTIONS_LENGTH
 							? `${srvInstructions.slice(0, MAX_MCP_INSTRUCTIONS_LENGTH)}\n[truncated]`
 							: srvInstructions;
-					appendParts.push(`### ${srvName}\n${truncated}`);
+					appendParts.push({
+						id: `mcp-server:${srvName}`,
+						kind: "append",
+						label: srvName,
+						provider: "MCP",
+						text: `### ${srvName}\n${truncated}`,
+					});
 				}
 			}
-			const appendPrompt = composeAppendPrompt(appendParts, options.appendSystemPrompt);
 			// Owned/in-band tool dialects (non-native) require the full functions-
 			// namespace catalog; native tool calling lets the compact name list suffice.
 			const nativeTools = resolveDialect(cfgToolsFormat.get(settings), agent?.state.model ?? model) === undefined;
@@ -4396,7 +4433,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				xdevTools: xdev ? xdevEntries(xdev) : [],
 				xdevDocs: xdevPromptDocs ? renderXdevPromptDocs(xdevPromptDocs, routedCatalogNames) : "",
 				resolvedCustomPrompt: options.customSystemPrompt,
+				customPromptPath: options.customSystemPromptPath,
 				systemPromptTemplate: options.systemPromptTemplate,
+				systemPromptTemplatePath: options.systemPromptTemplatePath,
 				skills: cfgSkillful.get(settings) ? (session?.promptSkills ?? skills) : [],
 				skillDescriptions,
 				contextFiles,
@@ -4404,7 +4443,29 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				toolNames,
 				rules: rulebookRules,
 				alwaysApplyRules,
-				resolvedAppendSystemPrompt: appendPrompt,
+				appendPromptParts: appendParts,
+				resolvedAppendSystemPrompt: options.appendSystemPrompt,
+				appendSystemPromptPath: options.appendSystemPromptPath,
+				optionSettings: {
+					intentField: cfgToolsIntentTracing.id,
+					eagerTasks: cfgTaskEager.id,
+					eagerTasksAlways: cfgTaskEager.id,
+					taskBatch: cfgTaskBatch.id,
+					taskMaxConcurrency: cfgTaskMaxConcurrency.id,
+					securityEnabled: cfgSecurityEnabled.id,
+					includeWorkspaceTree: cfgIncludeWorkspaceTree.id,
+					includeModelInPrompt: cfgIncludeModelInPrompt.id,
+					memoryBackend: cfgMemoryBackend.id,
+					xdevDocs: cfgToolsXdevDocs.id,
+					renderMermaid: cfgTuiRenderMermaid.id,
+					renderSvg: cfgTuiRenderSvg.id,
+					autoGraph: cfgTuiAutoGraph.id,
+					reactions: cfgTuiReactions.id,
+					inlineToolDescriptors: cfgInlineToolDescriptors.id,
+					nativeTools: cfgToolsFormat.id,
+					// A subagent's personality is always "none", whatever the setting says.
+					...(agentKind === "sub" ? {} : { personality: cfgPersonality.id }),
+				},
 				skillsSettings: cfgSkills.get(settings),
 				inlineToolDescriptors,
 				nativeTools,
@@ -4449,6 +4510,13 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			return {
 				systemPrompt: typeof customPrompt === "string" ? [customPrompt] : customPrompt,
 			};
+		};
+		// Every build of this session, initial and rebuilds alike, goes through here.
+		const systemPromptManifests = new SystemPromptManifestLog();
+		const rebuildSystemPrompt: SystemPromptRebuilder = async (toolNames, tools, xdev) => {
+			const result = await buildSessionSystemPrompt(toolNames, tools, xdev);
+			systemPromptManifests.record(result);
+			return result;
 		};
 
 		const toolNamesFromRegistry = Array.from(toolRegistry.keys());
@@ -5189,6 +5257,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			advisorStreamFn: settingsAwareStreamFn,
 			convertToLlm: convertToLlmFinal,
 			rebuildSystemPrompt,
+			describeSystemPrompt: prompt => systemPromptManifests.describe(prompt),
 			getXdevToolEntries: () => (toolSession.xdev ? xdevEntries(toolSession.xdev) : []),
 			xdev: toolSession.xdev,
 			presentationPinnedToolNames,

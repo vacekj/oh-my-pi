@@ -2239,6 +2239,271 @@ func (v *ContextUsage) decodeFrom(raw map[string]json.RawMessage) error {
 	return nil
 }
 
+type SystemPromptSourceKind string
+
+const (
+	SystemPromptSourceKindCustomPrompt    SystemPromptSourceKind = "custom-prompt"
+	SystemPromptSourceKindSystemMd        SystemPromptSourceKind = "system-md"
+	SystemPromptSourceKindPersonality     SystemPromptSourceKind = "personality"
+	SystemPromptSourceKindSkill           SystemPromptSourceKind = "skill"
+	SystemPromptSourceKindAlwaysApplyRule SystemPromptSourceKind = "always-apply-rule"
+	SystemPromptSourceKindRule            SystemPromptSourceKind = "rule"
+	SystemPromptSourceKindInternalURL     SystemPromptSourceKind = "internal-url"
+	SystemPromptSourceKindTool            SystemPromptSourceKind = "tool"
+	SystemPromptSourceKindToolInventory   SystemPromptSourceKind = "tool-inventory"
+	SystemPromptSourceKindXdevDocs        SystemPromptSourceKind = "xdev-docs"
+	SystemPromptSourceKindWorkstation     SystemPromptSourceKind = "workstation"
+	SystemPromptSourceKindModel           SystemPromptSourceKind = "model"
+	SystemPromptSourceKindContextFile     SystemPromptSourceKind = "context-file"
+	SystemPromptSourceKindNestedContext   SystemPromptSourceKind = "nested-context"
+	SystemPromptSourceKindWorkspaceTree   SystemPromptSourceKind = "workspace-tree"
+	SystemPromptSourceKindWorkspaceRoot   SystemPromptSourceKind = "workspace-root"
+	SystemPromptSourceKindRepoContext     SystemPromptSourceKind = "repo-context"
+	SystemPromptSourceKindAppend          SystemPromptSourceKind = "append"
+	SystemPromptSourceKindUserAppend      SystemPromptSourceKind = "user-append"
+	SystemPromptSourceKindEvalPrelude     SystemPromptSourceKind = "eval-prelude"
+)
+
+func (v *SystemPromptSourceKind) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "SystemPromptSourceKind")
+	if err != nil {
+		return err
+	}
+	switch value := SystemPromptSourceKind(s); value {
+	case SystemPromptSourceKindCustomPrompt, SystemPromptSourceKindSystemMd, SystemPromptSourceKindPersonality, SystemPromptSourceKindSkill, SystemPromptSourceKindAlwaysApplyRule, SystemPromptSourceKindRule, SystemPromptSourceKindInternalURL, SystemPromptSourceKindTool, SystemPromptSourceKindToolInventory, SystemPromptSourceKindXdevDocs, SystemPromptSourceKindWorkstation, SystemPromptSourceKindModel, SystemPromptSourceKindContextFile, SystemPromptSourceKindNestedContext, SystemPromptSourceKindWorkspaceTree, SystemPromptSourceKindWorkspaceRoot, SystemPromptSourceKindRepoContext, SystemPromptSourceKindAppend, SystemPromptSourceKindUserAppend, SystemPromptSourceKindEvalPrelude:
+		*v = value
+		return nil
+	}
+	return unknownValue("SystemPromptSourceKind", s)
+}
+
+// An input of the system prompt and where it came from.
+type SystemPromptSourceInfo struct {
+	// Stable per input across rebuilds (`context-file:<path>`, `skill:<name>`).
+	ID    string                 `json:"id"`
+	Kind  SystemPromptSourceKind `json:"kind"`
+	Label string                 `json:"label"`
+	// File the text was read from.
+	Path  *string                      `json:"path,omitempty"`
+	Level *SystemPromptSourceInfoLevel `json:"level,omitempty"`
+	// Distance of a project context file from the cwd (0 = the cwd).
+	Depth *int64 `json:"depth,omitempty"`
+	// Discovery provider that loaded the file.
+	Provider *string `json:"provider,omitempty"`
+	// Setting id that controls the input.
+	Setting *string `json:"setting,omitempty"`
+	// That setting's value, when it selects between variants.
+	Value *string `json:"value,omitempty"`
+}
+
+func (v *SystemPromptSourceInfo) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "SystemPromptSourceInfo", v.decodeFrom)
+}
+
+func (v *SystemPromptSourceInfo) decodeFrom(raw map[string]json.RawMessage) error {
+	var out SystemPromptSourceInfo
+	d := fieldDecoder{raw: raw, owner: "SystemPromptSourceInfo"}
+	d.required("id", &out.ID)
+	d.required("kind", &out.Kind)
+	d.required("label", &out.Label)
+	d.optional("path", &out.Path)
+	d.optional("level", &out.Level)
+	d.optional("depth", &out.Depth)
+	d.optional("provider", &out.Provider)
+	d.optional("setting", &out.Setting)
+	d.optional("value", &out.Value)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type SystemPromptSourceInfoLevel string
+
+const (
+	SystemPromptSourceInfoLevelUser    SystemPromptSourceInfoLevel = "user"
+	SystemPromptSourceInfoLevelProject SystemPromptSourceInfoLevel = "project"
+	SystemPromptSourceInfoLevelNative  SystemPromptSourceInfoLevel = "native"
+)
+
+func (v *SystemPromptSourceInfoLevel) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "SystemPromptSourceInfoLevel")
+	if err != nil {
+		return err
+	}
+	switch value := SystemPromptSourceInfoLevel(s); value {
+	case SystemPromptSourceInfoLevelUser, SystemPromptSourceInfoLevelProject, SystemPromptSourceInfoLevelNative:
+		*v = value
+		return nil
+	}
+	return unknownValue("SystemPromptSourceInfoLevel", s)
+}
+
+// An input located in the prompt: `systemPrompt[block].slice(start, end)` is its text.
+type SystemPromptSource struct {
+	ID       string                   `json:"id"`
+	Kind     SystemPromptSourceKind   `json:"kind"`
+	Label    string                   `json:"label"`
+	Block    int64                    `json:"block"`
+	Start    int64                    `json:"start"`
+	End      int64                    `json:"end"`
+	Path     *string                  `json:"path,omitempty"`
+	Level    *SystemPromptSourceLevel `json:"level,omitempty"`
+	Depth    *int64                   `json:"depth,omitempty"`
+	Provider *string                  `json:"provider,omitempty"`
+	Setting  *string                  `json:"setting,omitempty"`
+	Value    *string                  `json:"value,omitempty"`
+}
+
+func (v *SystemPromptSource) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "SystemPromptSource", v.decodeFrom)
+}
+
+func (v *SystemPromptSource) decodeFrom(raw map[string]json.RawMessage) error {
+	var out SystemPromptSource
+	d := fieldDecoder{raw: raw, owner: "SystemPromptSource"}
+	d.required("id", &out.ID)
+	d.required("kind", &out.Kind)
+	d.required("label", &out.Label)
+	d.required("block", &out.Block)
+	d.required("start", &out.Start)
+	d.required("end", &out.End)
+	d.optional("path", &out.Path)
+	d.optional("level", &out.Level)
+	d.optional("depth", &out.Depth)
+	d.optional("provider", &out.Provider)
+	d.optional("setting", &out.Setting)
+	d.optional("value", &out.Value)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type SystemPromptSourceLevel string
+
+const (
+	SystemPromptSourceLevelUser    SystemPromptSourceLevel = "user"
+	SystemPromptSourceLevelProject SystemPromptSourceLevel = "project"
+	SystemPromptSourceLevelNative  SystemPromptSourceLevel = "native"
+)
+
+func (v *SystemPromptSourceLevel) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "SystemPromptSourceLevel")
+	if err != nil {
+		return err
+	}
+	switch value := SystemPromptSourceLevel(s); value {
+	case SystemPromptSourceLevelUser, SystemPromptSourceLevelProject, SystemPromptSourceLevelNative:
+		*v = value
+		return nil
+	}
+	return unknownValue("SystemPromptSourceLevel", s)
+}
+
+type SystemPromptTemplate struct {
+	Kind SystemPromptTemplateKind `json:"kind"`
+	// Template or prompt file; absent for the bundled template and literal text.
+	Path *string `json:"path,omitempty"`
+}
+
+func (v *SystemPromptTemplate) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "SystemPromptTemplate", v.decodeFrom)
+}
+
+func (v *SystemPromptTemplate) decodeFrom(raw map[string]json.RawMessage) error {
+	var out SystemPromptTemplate
+	d := fieldDecoder{raw: raw, owner: "SystemPromptTemplate"}
+	d.required("kind", &out.Kind)
+	d.optional("path", &out.Path)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type SystemPromptTemplateKind string
+
+const (
+	SystemPromptTemplateKindBundled      SystemPromptTemplateKind = "bundled"
+	SystemPromptTemplateKindCustomPrompt SystemPromptTemplateKind = "custom-prompt"
+	SystemPromptTemplateKindTemplate     SystemPromptTemplateKind = "template"
+)
+
+func (v *SystemPromptTemplateKind) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "SystemPromptTemplateKind")
+	if err != nil {
+		return err
+	}
+	switch value := SystemPromptTemplateKind(s); value {
+	case SystemPromptTemplateKindBundled, SystemPromptTemplateKindCustomPrompt, SystemPromptTemplateKindTemplate:
+		*v = value
+		return nil
+	}
+	return unknownValue("SystemPromptTemplateKind", s)
+}
+
+// A value the template's conditionals read, and the setting it came from.
+type SystemPromptGate struct {
+	Name string `json:"name"`
+	// The value as text (`true`, `3`, `eager`).
+	Value   string  `json:"value"`
+	Setting *string `json:"setting,omitempty"`
+}
+
+func (v *SystemPromptGate) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "SystemPromptGate", v.decodeFrom)
+}
+
+func (v *SystemPromptGate) decodeFrom(raw map[string]json.RawMessage) error {
+	var out SystemPromptGate
+	d := fieldDecoder{raw: raw, owner: "SystemPromptGate"}
+	d.required("name", &out.Name)
+	d.required("value", &out.Value)
+	d.optional("setting", &out.Setting)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+// Which input produced which text of `systemPrompt`. Text no source covers is the template's own.
+type SystemPromptSources struct {
+	Template SystemPromptTemplate `json:"template"`
+	// Active tool names, the inputs of the template's tool sections.
+	Tools   []string             `json:"tools"`
+	Gates   []SystemPromptGate   `json:"gates"`
+	Sources []SystemPromptSource `json:"sources"`
+	// Inputs that reached the prompt but whose text could not be located exactly.
+	Unlocated []SystemPromptSourceInfo `json:"unlocated"`
+	// Blocks from this index on were added after the build (memory recall).
+	BuiltBlocks int64 `json:"builtBlocks"`
+}
+
+func (v *SystemPromptSources) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "SystemPromptSources", v.decodeFrom)
+}
+
+func (v *SystemPromptSources) decodeFrom(raw map[string]json.RawMessage) error {
+	var out SystemPromptSources
+	d := fieldDecoder{raw: raw, owner: "SystemPromptSources"}
+	d.required("template", &out.Template)
+	d.required("tools", &out.Tools)
+	d.required("gates", &out.Gates)
+	d.required("sources", &out.Sources)
+	d.required("unlocated", &out.Unlocated)
+	d.required("builtBlocks", &out.BuiltBlocks)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
 // Displayable queue-chip text for pending user-authored messages; accepted verbatim by `remove_queued_message`.
 type QueuedMessagesState struct {
 	Steering []string `json:"steering"`
@@ -2566,9 +2831,11 @@ type SessionState struct {
 	QueuedMessages QueuedMessagesState `json:"queuedMessages"`
 	TodoPhases     []TodoPhase         `json:"todoPhases"`
 	// System prompt sections, for session dumps.
-	SystemPrompt []string         `json:"systemPrompt"`
-	DumpTools    []ToolDescriptor `json:"dumpTools"`
-	ContextUsage *ContextUsage    `json:"contextUsage,omitempty"`
+	SystemPrompt []string `json:"systemPrompt"`
+	// Source manifest of `systemPrompt`; null when the live prompt is not one the session built (an extension replaced it).
+	SystemPromptSources *SystemPromptSources `json:"systemPromptSources,omitempty"`
+	DumpTools           []ToolDescriptor     `json:"dumpTools"`
+	ContextUsage        *ContextUsage        `json:"contextUsage,omitempty"`
 	// Current goal mode; null when the session has no goal.
 	Goal *GoalModeState `json:"goal"`
 }
@@ -2606,6 +2873,7 @@ func (v *SessionState) decodeFrom(raw map[string]json.RawMessage) error {
 	d.defaulted("todoPhases", &out.TodoPhases, `[]`)
 	d.scalarOrArray("systemPrompt")
 	d.defaulted("systemPrompt", &out.SystemPrompt, `[]`)
+	d.optional("systemPromptSources", &out.SystemPromptSources)
 	d.defaulted("dumpTools", &out.DumpTools, `[]`)
 	d.optional("contextUsage", &out.ContextUsage)
 	d.defaulted("goal", &out.Goal, `null`)

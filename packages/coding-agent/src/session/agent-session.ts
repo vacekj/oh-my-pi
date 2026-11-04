@@ -229,6 +229,7 @@ import { cfgSecretsEnabled } from "../secrets/settings";
 import { releaseSharpshooterSession } from "../sharpshooter/backend";
 import { flushSharpshooterExtraction } from "../sharpshooter/extract";
 import { toolReadsSkillUris } from "../system-prompt";
+import type { SystemPromptDescription } from "../system-prompt-sources";
 import {
 	AUTO_THINKING,
 	type ConfiguredThinkingLevel,
@@ -1019,6 +1020,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	#costCapRefusal: CostCapRefusal | undefined;
 	/** Entries of tools mounted under `xd://`; empty when virtual devices are unmounted. */
 	getXdevToolEntries: () => Array<{ name: string; summary: string }>;
+	readonly #describeSystemPrompt: ((prompt: readonly string[]) => SystemPromptDescription | null) | undefined;
 	readonly yieldQueue: YieldQueue;
 	editStore?: EditStore;
 
@@ -2631,6 +2633,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		});
 		this.#convertToLlm = config.convertToLlm ?? convertToLlm;
 		this.getXdevToolEntries = config.getXdevToolEntries ?? (() => []);
+		this.#describeSystemPrompt = config.describeSystemPrompt;
 		const sessionToolsHost: SessionToolsHost = {
 			agent: this.agent,
 			sessionManager: this.sessionManager,
@@ -7387,6 +7390,15 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	/** Current effective system prompt blocks (includes any per-turn extension modifications) */
 	get systemPrompt(): string[] {
 		return this.agent.state.systemPrompt;
+	}
+
+	/**
+	 * Which input produced which text of {@link systemPrompt}. `null` when the
+	 * live prompt is not one this session built (an extension replaced it for
+	 * the turn); `undefined` when the session builds no manifests.
+	 */
+	get systemPromptSources(): SystemPromptDescription | null | undefined {
+		return this.#describeSystemPrompt?.(this.agent.state.systemPrompt);
 	}
 
 	/** Base system prompt blocks the next turn builds on, before any `before_agent_start` override. */

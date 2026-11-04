@@ -38,6 +38,13 @@ import pragmaticPersonality from "./prompts/system/personalities/pragmatic.md" w
 import projectPromptTemplate from "./prompts/system/project-prompt.md" with { type: "text" };
 import systemPromptTemplate from "./prompts/system/system-prompt.md" with { type: "text" };
 import userAppendPromptTemplate from "./prompts/system/user-append.md" with { type: "text" };
+import {
+	type AppendPromptPart,
+	type LocateResult,
+	locateSources,
+	SourceMarker,
+	type SystemPromptManifest,
+} from "./system-prompt-sources";
 import { normalizeConcurrencyLimit } from "./task/parallel";
 import type { ActiveRepoContext } from "@oh-my-pi/pi-tui/status-line/host";
 import { XD_URL_PREFIX } from "@oh-my-pi/pi-tui/tools/xd-url";
@@ -119,11 +126,11 @@ const PERSONALITY_SPECS: Record<Exclude<Personality, "none">, string> = {
  * preset. Read failures other than a missing file warn instead of failing the
  * build.
  */
-async function loadPersonalityOverride(): Promise<string | null> {
+async function loadPersonalityOverride(): Promise<{ content: string; path: string } | null> {
 	const filePath = path.join(getAgentDir(), "PERSONALITY.md");
 	try {
 		const content = (await Bun.file(filePath).text()).trim();
-		if (content) return content;
+		if (content) return { content, path: filePath };
 		logger.warn("PERSONALITY.md is empty; using the configured personality preset", { path: filePath });
 	} catch (error) {
 		if (!isEnoent(error)) {
@@ -333,9 +340,9 @@ export interface LoadContextFilesOptions {
  *
  * @internal Exported for testing.
  */
-export function dedupeContainedContextFiles(
-	contextFiles: Array<{ path: string; content: string; depth?: number }>,
-): Array<{ path: string; content: string; depth?: number }> {
+export function dedupeContainedContextFiles<T extends { path: string; content: string; depth?: number }>(
+	contextFiles: T[],
+): T[] {
 	// Sort by depth descending: higher depth (farther from cwd, less
 	// authoritative) first, lower depth (closer to cwd, more authoritative)
 	// last. Stable sort preserves caller order among equal-depth files.
@@ -359,14 +366,22 @@ export function withoutAgentsMd<T extends { path: string }>(files: T[]): T[] {
 	return files.filter(file => path.basename(file.path).toLowerCase() !== "agents.md");
 }
 
+/** A context file as the prompt builder receives it. `level`/`provider` say where discovery found it. */
+export interface PromptContextFile {
+	path: string;
+	content: string;
+	depth?: number;
+	level?: "user" | "project";
+	/** Discovery provider display name ("OMP", "Claude Code", …). */
+	provider?: string;
+}
+
 /**
  * Load all project context files using the capability API.
  * Returns {path, content, depth} entries for all discovered context files.
  * Files are sorted by depth (descending) so files closer to cwd appear last/more prominent.
  */
-export async function loadProjectContextFiles(
-	options: LoadContextFilesOptions = {},
-): Promise<Array<{ path: string; content: string; depth?: number }>> {
+export async function loadProjectContextFiles(options: LoadContextFilesOptions = {}): Promise<PromptContextFile[]> {
 	const resolvedCwd = options.cwd ?? getProjectDir();
 
 	const result = await loadCapability(contextFileCapability.id, {
@@ -385,6 +400,8 @@ export async function loadProjectContextFiles(
 				path: contextFile.path,
 				content: await expandAtImports(contextFile.content, contextFile.path),
 				depth: contextFile.depth,
+				level: contextFile.level,
+				provider: contextFile._source?.providerName,
 			};
 		}),
 	);
@@ -405,19 +422,26 @@ export async function loadProjectContextFiles(
  * Project-level SYSTEM.md overrides user-level SYSTEM.md.
  */
 export async function loadSystemPromptFiles(options: LoadContextFilesOptions = {}): Promise<string | null> {
+	return (await loadSystemPromptFile(options))?.content ?? null;
+}
+
+interface SystemPromptCustomizationFile {
+	content: string;
+	path: string;
+	level: "user" | "project";
+}
+
+/** {@link loadSystemPromptFiles} with the file the text came from. */
+async function loadSystemPromptFile(
+	options: LoadContextFilesOptions = {},
+): Promise<SystemPromptCustomizationFile | null> {
 	const resolvedCwd = options.cwd ?? getProjectDir();
 
 	const result = await loadCapability<SystemPromptFile>(systemPromptCapability.id, { cwd: resolvedCwd });
 
-	if (result.items.length === 0) return null;
-
-	const projectLevel = result.items.find(item => item.level === "project");
-	if (projectLevel) {
-		return projectLevel.content;
-	}
-
-	const userLevel = result.items.find(item => item.level === "user");
-	return userLevel?.content ?? null;
+	const item =
+		result.items.find(entry => entry.level === "project") ?? result.items.find(entry => entry.level === "user");
+	return item ? { content: item.content, path: item.path, level: item.level } : null;
 }
 
 export const DEFAULT_SYSTEM_PROMPT_TOOL_NAMES = ["read", "bash", "edit", "write"] as const;
@@ -520,6 +544,19 @@ export interface BuildSystemPromptOptions {
 	appendSystemPrompt?: string;
 	/** Already-loaded append prompt text; bypasses path resolution. */
 	resolvedAppendSystemPrompt?: string;
+	/**
+	 * Generated append blocks (memory, MCP routes, server instructions, …), each
+	 * with its origin. When set, the builder composes the appended prompt from
+	 * these and `resolvedAppendSystemPrompt` (then the user's own append text),
+	 * as {@link composeAppendPrompt} does, so each part is attributed.
+	 */
+	appendPromptParts?: AppendPromptPart[];
+	/** Files the custom prompt, template and append text were read from, for the source manifest. */
+	customPromptPath?: string;
+	systemPromptTemplatePath?: string;
+	appendSystemPromptPath?: string;
+	/** Setting id each option was read from (`{ personality: "personality" }`), for the source manifest. */
+	optionSettings?: Partial<Record<keyof BuildSystemPromptOptions, string>>;
 	/** Inline full tool descriptors in the system prompt. Default: false */
 	inlineToolDescriptors?: boolean;
 	/**
@@ -536,7 +573,7 @@ export interface BuildSystemPromptOptions {
 	/** Additional workspace directories beyond cwd (multi-root), absolute. Injected into the project prompt. */
 	additionalWorkspaceRoots?: string[];
 	/** Pre-loaded context files (skips discovery if provided). */
-	contextFiles?: Array<{ path: string; content: string; depth?: number }>;
+	contextFiles?: PromptContextFile[];
 	/** Load no context files beyond `contextFiles`: none for additional workspace roots, no nested AGENTS.md list. */
 	noContextFiles?: boolean;
 	/** Drop every context file named `AGENTS.md`, including ones discovered for additional workspace roots. */
@@ -633,6 +670,8 @@ export interface BuildSystemPromptResult {
 	 * a catalog the prompt already carries (issue #7139).
 	 */
 	xdevCatalogNames?: readonly string[];
+	/** Which input produced which text of `systemPrompt`. Absent when NULL_PROMPT empties the prompt. */
+	manifest?: SystemPromptManifest;
 }
 
 /** Static wrapper; compiled (not rendered) so user-authored Markdown passes through byte-for-byte. */
@@ -714,6 +753,8 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	const resolvedCwd = cwd ?? getProjectDir();
 	let resolvedSystemPromptTemplate = options.systemPromptTemplate;
 	let resolvedCustomPromptInput = providedResolvedCustomPrompt;
+	let templatePath = options.systemPromptTemplatePath;
+	let customPromptPath = options.customPromptPath;
 	const hasExplicitCustomPrompt = customPrompt !== undefined || providedResolvedCustomPrompt !== undefined;
 	if (resolvedSystemPromptTemplate !== undefined && hasExplicitCustomPrompt) {
 		throw new Error("systemPromptTemplate cannot be combined with a literal custom system prompt");
@@ -722,8 +763,10 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		const override = await discoverSystemPromptOverride(resolvedCwd);
 		if (override?.kind === "template" && override.content !== undefined) {
 			resolvedSystemPromptTemplate = override.content;
+			templatePath = override.path;
 		} else if (override?.content !== undefined) {
 			resolvedCustomPromptInput = override.content;
+			customPromptPath = override.path;
 		}
 	}
 	const hasDiscoveredTemplate =
@@ -732,6 +775,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		if (hasDiscoveredTemplate) {
 			logger.warn("Ignoring empty discovered system prompt template; using the bundled prompt");
 			resolvedSystemPromptTemplate = undefined;
+			templatePath = undefined;
 		} else {
 			throw new Error("System prompt template must not be empty");
 		}
@@ -740,7 +784,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	const prepDefaults = {
 		resolvedCustomPrompt: undefined as string | undefined,
 		resolvedAppendPrompt: undefined as string | undefined,
-		systemPromptCustomization: null as string | null,
+		systemPromptCustomization: null as SystemPromptCustomizationFile | null,
 		contextFiles: dedupeContainedContextFiles(
 			excludeAgentsMd ? withoutAgentsMd(providedContextFiles ?? []) : (providedContextFiles ?? []),
 		),
@@ -790,9 +834,9 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	// capability-path SYSTEM.md walk-up must not silently augment either.
 	const callerControlsCustomPrompt =
 		hasExplicitCustomPrompt || resolvedSystemPromptTemplate !== undefined || resolvedCustomPromptInput !== undefined;
-	const systemPromptCustomizationPromise: Promise<string | null> = callerControlsCustomPrompt
+	const systemPromptCustomizationPromise = callerControlsCustomPrompt
 		? Promise.resolve(null)
-		: logger.time("loadSystemPromptFiles", loadSystemPromptFiles, { cwd: resolvedCwd });
+		: logger.time("loadSystemPromptFiles", loadSystemPromptFile, { cwd: resolvedCwd });
 	const contextFilesPromise = (async () => {
 		const primary = providedContextFiles
 			? providedContextFiles
@@ -841,10 +885,13 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 			? Promise.resolve(providedActiveRepoContext)
 			: logger.time("resolveActiveRepoContext", () => resolveActiveRepoContext(resolvedCwd));
 	// "none" (explicit off — and every subagent) omits the block and skips the file lookup.
-	const bundledPersonality = personality === "none" ? "" : PERSONALITY_SPECS[personality].trim();
-	const personalityPromise: Promise<string> =
+	const bundledPersonality = { content: personality === "none" ? "" : PERSONALITY_SPECS[personality].trim() } as {
+		content: string;
+		path?: string;
+	};
+	const personalityPromise: Promise<{ content: string; path?: string }> =
 		personality === "none"
-			? Promise.resolve("")
+			? Promise.resolve(bundledPersonality)
 			: logger
 					.time("loadPersonalityOverride", loadPersonalityOverride)
 					.then(override => override ?? bundledPersonality);
@@ -852,12 +899,12 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	const [
 		resolvedCustomPrompt,
 		resolvedAppendPrompt,
-		systemPromptCustomization,
+		systemPromptCustomizationFile,
 		contextFiles,
 		skills,
 		workspaceTree,
 		activeRepoContext,
-		personalityBlock,
+		personalitySource,
 	] = await Promise.all([
 		withDeadline(
 			"customPrompt",
@@ -982,71 +1029,227 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		hasSkillReader ? skills.filter(skill => skill.hide !== true) : [],
 	);
 
+	const systemPromptCustomization = systemPromptCustomizationFile?.content ?? null;
+	const appendPromptParts = options.appendPromptParts;
+	// With attributed parts, `resolvedAppendPrompt` is only the user's own append text.
+	const appendPrompt = appendPromptParts
+		? composeAppendPrompt(
+				appendPromptParts.map(part => part.text),
+				resolvedAppendPrompt,
+			)
+		: resolvedAppendPrompt;
 	const effectiveSystemPromptCustomization = dedupePromptSource(systemPromptCustomization, [
 		resolvedCustomPrompt,
-		resolvedAppendPrompt,
+		appendPrompt,
 	]);
 	const contextPromptSources = contextFiles.map(file => file.content);
 	const promptSources = [
 		effectiveSystemPromptCustomization,
 		resolvedCustomPrompt,
-		resolvedAppendPrompt,
+		appendPrompt,
 		...contextPromptSources,
 	];
 	const injectedAlwaysApplyRules = dedupeAlwaysApplyRules(alwaysApplyRules, promptSources);
 
 	const environment = getEnvironmentInfo();
-	const data = {
-		systemPromptCustomization: effectiveSystemPromptCustomization,
-		customPrompt: resolvedCustomPrompt,
-		appendPrompt: resolvedAppendPrompt ?? "",
-		tools: [...new Set([...toolNames, ...xdevTools.map(mounted => mounted.name)])],
-		toolInfo,
-		toolInventory,
-		inlineToolDescriptors,
-		toolListMode,
-		toolRefs,
-		environment,
-		contextFiles,
-		agentsMdSearch: { files: agentsMdFiles },
-		workspaceTree,
-		hasSkillUriAccess,
-		internalUrls: InternalUrlRouter.instance().describe(schemeHost),
-		skills: filteredSkills,
-		rules: rules ?? [],
-		alwaysApplyRules: injectedAlwaysApplyRules,
-		cwd: promptCwd,
-		additionalWorkspaceRoots: additionalWorkspaceRoots.filter(d => path.resolve(d) !== path.resolve(resolvedCwd)),
-		model: includeModelInPrompt ? (model ?? "") : "",
-		// An explicit eager-tasks mode lifts balanced/restrained wording to eager; gated has its own eager-tasks text.
-		delegationTier: eagerTasks && delegationBias !== "gated" ? "eager" : delegationBias,
-		personality: personalityBlock,
-		intentTracing: !!intentField,
-		intentField: intentField ?? "",
-		intentGuidance: $env.PI_INTENT_PROMPT || intentGuidance || "",
-		eagerTasks,
-		eagerTasksAlways,
-		taskBatch,
-		MAX_CONCURRENCY: normalizeConcurrencyLimit(taskMaxConcurrency),
-		scoutAvailable,
-		taskIrcEnabled,
-		secretsEnabled,
-		browserEnabled: evalPreludes.some(prelude => prelude.name === "browser"),
-		computerEnabled: evalPreludes.some(prelude => prelude.name === "computer"),
-		includeWorkspaceTree,
-		renderMermaid,
-		renderSvg,
-		autoGraph,
-		reactions,
-		xdevTools,
-		hasDynamicXdevTools: xdevTools.some(mounted => mounted.dynamic === true),
-		xdevDocs,
-		autoQaEnabled,
-		ovnfs,
-		writeTransportOnly,
-		subagent,
+	const internalUrls = InternalUrlRouter.instance().describeEntries(schemeHost);
+	const workspaceRoots = additionalWorkspaceRoots.filter(d => path.resolve(d) !== path.resolve(resolvedCwd));
+	const optionSettings = options.optionSettings ?? {};
+	const appendPromptPath =
+		options.appendSystemPromptPath ??
+		(appendSystemPrompt && !appendSystemPrompt.includes("\n") && resolvedAppendPrompt !== appendSystemPrompt
+			? appendSystemPrompt
+			: undefined);
+	const resolvedCustomPromptPath =
+		customPromptPath ??
+		(customPrompt && !customPrompt.includes("\n") && resolvedCustomPrompt !== customPrompt
+			? customPrompt
+			: undefined);
+	// The template data, with each input value passed through `mark`: the plain
+	// marker yields the prompt itself, the tracking one the source manifest.
+	const templateData = (mark: SourceMarker) => {
+		const userAppend = mark.wrap(
+			{ id: "user-append", kind: "user-append", label: "Appended system prompt", path: appendPromptPath },
+			resolvedAppendPrompt,
+		);
+		const markedAppend = appendPromptParts
+			? composeAppendPrompt(
+					appendPromptParts.map(({ text, ...info }) => mark.wrap(info, text)),
+					userAppend,
+				)
+			: userAppend;
+		const lastEnvironment = environment.length - 1;
+		const [workstationOpen, workstationClose] =
+			environment.length > 0
+				? mark.around({ id: "workstation", kind: "workstation", label: "Workstation" })
+				: ["", ""];
+		return {
+			systemPromptCustomization: mark.wrap(
+				{
+					id: "system-md",
+					kind: "system-md",
+					label: "SYSTEM.md",
+					path: systemPromptCustomizationFile?.path,
+					level: systemPromptCustomizationFile?.level,
+				},
+				effectiveSystemPromptCustomization,
+			),
+			customPrompt: mark.wrap(
+				{
+					id: "custom-prompt",
+					kind: "custom-prompt",
+					label: "Custom system prompt",
+					path: resolvedCustomPromptPath,
+				},
+				resolvedCustomPrompt,
+			),
+			appendPrompt: markedAppend ?? "",
+			tools: [...new Set([...toolNames, ...xdevTools.map(mounted => mounted.name)])],
+			toolInfo: toolInfo.map(tool => {
+				const [open, close] = mark.around({
+					id: `tool:${tool.internalName}`,
+					kind: "tool",
+					label: tool.internalName,
+				});
+				return tool.label
+					? { ...tool, label: open + tool.label, name: tool.name + close }
+					: { ...tool, name: open + tool.name + close };
+			}),
+			toolInventory: mark.wrap(
+				{ id: "tool-inventory", kind: "tool-inventory", label: "Tool catalog" },
+				toolInventory,
+			),
+			inlineToolDescriptors,
+			toolListMode,
+			toolRefs,
+			environment: environment.map((entry, index) => ({
+				label: index === 0 ? workstationOpen + entry.label : entry.label,
+				value: index === lastEnvironment ? entry.value + workstationClose : entry.value,
+			})),
+			contextFiles: contextFiles.map(file => ({
+				...file,
+				content: mark.wrap(
+					{
+						id: `context-file:${file.path}`,
+						kind: "context-file",
+						label: path.basename(file.path),
+						path: file.path,
+						level: file.level,
+						depth: file.depth,
+						provider: file.provider,
+					},
+					file.content,
+				),
+			})),
+			agentsMdSearch: {
+				files: agentsMdFiles.map(file =>
+					mark.wrap({ id: `nested-context:${file}`, kind: "nested-context", label: file, path: file }, file),
+				),
+			},
+			workspaceTree: {
+				...workspaceTree,
+				rendered: mark.wrap(
+					{
+						id: "workspace-tree",
+						kind: "workspace-tree",
+						label: "Workspace tree",
+						setting: optionSettings.includeWorkspaceTree,
+					},
+					workspaceTree.rendered,
+				),
+			},
+			hasSkillUriAccess,
+			internalUrls: internalUrls.map(entry =>
+				mark.wrap(
+					{ id: `internal-url:${entry.scheme}`, kind: "internal-url", label: `${entry.scheme}://` },
+					entry.line,
+				),
+			),
+			skills: filteredSkills.map(skill => {
+				const [open, close] = mark.around({
+					id: `skill:${skill.name}`,
+					kind: "skill",
+					label: skill.name,
+					path: skill.filePath,
+					level: skill._source?.level,
+					provider: skill._source?.providerName,
+				});
+				return { ...skill, name: open + skill.name, description: skill.description + close };
+			}),
+			rules: (rules ?? []).map(rule => {
+				const [open, close] = mark.around({
+					id: `rule:${rule.name}`,
+					kind: "rule",
+					label: rule.name,
+					path: rule.path,
+				});
+				return { ...rule, name: open + rule.name, description: (rule.description ?? "") + close };
+			}),
+			alwaysApplyRules: injectedAlwaysApplyRules.map(rule => ({
+				...rule,
+				content: mark.wrap(
+					{ id: `always-apply-rule:${rule.name}`, kind: "always-apply-rule", label: rule.name, path: rule.path },
+					rule.content,
+				),
+			})),
+			cwd: promptCwd,
+			additionalWorkspaceRoots: workspaceRoots.map(root =>
+				mark.wrap({ id: `workspace-root:${root}`, kind: "workspace-root", label: root, path: root }, root),
+			),
+			model: includeModelInPrompt
+				? mark.wrap(
+						{ id: "model", kind: "model", label: "Model", setting: optionSettings.includeModelInPrompt },
+						model ?? "",
+					)
+				: "",
+			// An explicit eager-tasks mode lifts balanced/restrained wording to eager; gated has its own eager-tasks text.
+			delegationTier: eagerTasks && delegationBias !== "gated" ? "eager" : delegationBias,
+			personality: mark.wrap(
+				{
+					id: "personality",
+					kind: "personality",
+					label: "Personality",
+					path: personalitySource.path,
+					setting: optionSettings.personality,
+					value: personality,
+				},
+				personalitySource.content,
+			),
+			intentTracing: !!intentField,
+			intentField: intentField ?? "",
+			intentGuidance: $env.PI_INTENT_PROMPT || intentGuidance || "",
+			eagerTasks,
+			eagerTasksAlways,
+			taskBatch,
+			MAX_CONCURRENCY: normalizeConcurrencyLimit(taskMaxConcurrency),
+			scoutAvailable,
+			taskIrcEnabled,
+			secretsEnabled,
+			browserEnabled: evalPreludes.some(prelude => prelude.name === "browser"),
+			computerEnabled: evalPreludes.some(prelude => prelude.name === "computer"),
+			includeWorkspaceTree,
+			renderMermaid,
+			renderSvg,
+			autoGraph,
+			reactions,
+			xdevTools,
+			hasDynamicXdevTools: xdevTools.some(mounted => mounted.dynamic === true),
+			xdevDocs: mark.wrap(
+				{ id: "xdev-docs", kind: "xdev-docs", label: "xd:// device docs", setting: optionSettings.xdevDocs },
+				xdevDocs,
+			),
+			autoQaEnabled,
+			ovnfs,
+			writeTransportOnly,
+			subagent,
+			activeRepoContext: mark.wrap(
+				{ id: "repo-context", kind: "repo-context", label: "Active repository" },
+				activeRepoContextPrompt,
+			),
+		};
 	};
-	const selectedTemplate = resolvedCustomPrompt
+	const data = templateData(SourceMarker.plain());
+	let selectedTemplate = resolvedCustomPrompt
 		? customSystemPromptTemplate
 		: (resolvedSystemPromptTemplate ?? systemPromptTemplate);
 	let rendered: string;
@@ -1061,23 +1264,96 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 			error: String(error),
 		});
 		resolvedSystemPromptTemplate = undefined;
+		templatePath = undefined;
+		selectedTemplate = systemPromptTemplate;
 		rendered = prompt.render(systemPromptTemplate, data);
 	}
 	const systemPrompt = [rendered];
+	const preludeBlocks: Array<{ block: number; name: string }> = [];
 	for (const prelude of evalPreludes) {
 		const guidance = prelude.guidance?.trim();
-		if (guidance) systemPrompt.push(guidance);
+		if (!guidance) continue;
+		preludeBlocks.push({ block: systemPrompt.length, name: prelude.name });
+		systemPrompt.push(guidance);
 	}
 	// Working-directory content (context files with their paths, workspace
 	// tree/roots, active repo) and session append text form one trailing
 	// `<project-context>` block after every static block, so sessions in
 	// different directories share the static prefix and the Anthropic head
 	// cache breakpoint lands right before this block.
-	const projectPrompt = prompt
-		.render(projectPromptTemplate, { ...data, activeRepoContext: activeRepoContextPrompt })
-		.trim();
+	const projectPrompt = prompt.render(projectPromptTemplate, data).trim();
 	if (projectPrompt) {
 		systemPrompt.push(projectPrompt);
+	}
+
+	let manifest: SystemPromptManifest | undefined;
+	try {
+		const tracker = SourceMarker.tracking();
+		const marked = templateData(tracker);
+		const located: LocateResult = { sources: [], unlocated: [] };
+		locateSources(0, prompt.compile(selectedTemplate)(marked), rendered, tracker.entries, located);
+		for (const { block, name } of preludeBlocks) {
+			located.sources.push({
+				id: `eval-prelude:${name}`,
+				kind: "eval-prelude",
+				label: name,
+				block,
+				start: 0,
+				end: systemPrompt[block].length,
+			});
+		}
+		if (projectPrompt) {
+			locateSources(
+				systemPrompt.length - 1,
+				prompt.compile(projectPromptTemplate)(marked),
+				projectPrompt,
+				tracker.entries,
+				located,
+			);
+		}
+		const gateValues: Array<[keyof BuildSystemPromptOptions, string | number | boolean | undefined]> = [
+			["personality", personality],
+			["intentField", !!intentField],
+			["eagerTasks", eagerTasks],
+			["eagerTasksAlways", eagerTasksAlways],
+			["taskBatch", taskBatch],
+			["taskMaxConcurrency", taskMaxConcurrency],
+			["taskIrcEnabled", taskIrcEnabled],
+			["scoutAvailable", scoutAvailable],
+			["delegationBias", delegationBias],
+			["secretsEnabled", secretsEnabled],
+			["includeWorkspaceTree", includeWorkspaceTree],
+			["includeModelInPrompt", includeModelInPrompt],
+			["renderMermaid", renderMermaid],
+			["renderSvg", renderSvg],
+			["autoGraph", autoGraph],
+			["reactions", reactions],
+			["inlineToolDescriptors", inlineToolDescriptors],
+			["nativeTools", nativeTools],
+			["memoryBackend", memoryBackend ?? false],
+			["securityEnabled", securityEnabled],
+			["settingsApproval", settingsApproval],
+			["outReplies", outReplies],
+			["autoQaEnabled", autoQaEnabled],
+			["writeTransportOnly", writeTransportOnly],
+			["subagent", subagent],
+		];
+		manifest = {
+			template: resolvedCustomPrompt
+				? { kind: "custom-prompt", path: resolvedCustomPromptPath }
+				: resolvedSystemPromptTemplate !== undefined
+					? { kind: "template", path: templatePath }
+					: { kind: "bundled" },
+			tools: data.tools,
+			gates: gateValues.flatMap(([name, value]) =>
+				value === undefined ? [] : [{ name, value: String(value), setting: optionSettings[name] }],
+			),
+			sources: located.sources,
+			unlocated: located.unlocated,
+		};
+	} catch (error) {
+		// The manifest only describes the prompt; never fail a build over it.
+		logger.warn("System prompt source manifest failed", { error: String(error) });
 	}
 
 	// Claim delivery only when the rendered block 0 actually carries the xd://
@@ -1087,5 +1363,5 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		!resolvedCustomPrompt && xdevTools.length > 0 && rendered.includes("xd://")
 			? xdevTools.map(mounted => mounted.name)
 			: undefined;
-	return { systemPrompt, xdevCatalogNames };
+	return { systemPrompt, xdevCatalogNames, manifest };
 }
