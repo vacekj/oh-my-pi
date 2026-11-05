@@ -139,6 +139,25 @@ describe("per-call exact selection after background discovery", () => {
 		}
 	});
 
+	it("runs a catalog-selected worker at max effort without a granting role or default lock", async () => {
+		const model = Object.assign(
+			createMockModel({ id: "catalog-worker", reasoning: true, handler: () => ({ content: ["Catalog answer."] }) }),
+			{ thinking: { mode: "effort", efforts: [Effort.Low, Effort.High, Effort.Max] } satisfies ThinkingConfig },
+		);
+		const result = await runWorker({
+			model,
+			settings: perCallSettings(model, {
+				modelRoles: {},
+				"task.modelAccess": "available",
+				"task.agentModelOverrides": { worker: "mock/another-default" },
+			}),
+			perCallModel: `mock/${model.id}:max`,
+		});
+		expect(result.exitCode).toBe(0);
+		expect(result.output).toBe("Catalog answer.");
+		expect(model.calls.map(call => call.options?.reasoning)).toEqual([Effort.Max]);
+	});
+
 	it("refuses the next request once the operator revokes the grant mid-run", async () => {
 		const settings = perCallSettings(createMockModel({ id: "revoked-model" }), { "retry.enabled": false });
 		const model = createMockModel({

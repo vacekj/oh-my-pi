@@ -236,11 +236,12 @@ A missing name fails preflight with `Unknown agent "...". Available: ...`; no su
 
 For task dispatch, model precedence is:
 
-1. `task.agentModelOverrides[agentName]`
-2. the agent frontmatter's prioritized `model` list
-3. the parent's active model, then its configured/default model fallback
+1. An explicit per-call `model` admitted by the operator's selection policy, or an SDK host's request selector.
+2. `task.agentModelOverrides[agentName]` (an agent-specific default, not a lock).
+3. The agent frontmatter's prioritized `model` list. For general-purpose `@task`, model-inheriting agents, or agents with no model, a configured `task.defaultModel` takes precedence.
+4. The task role or parent's active/configured model fallback.
 
-A call's per-call `model` (task item / flat call, eval `agent()` / `workpool()`; see below) replaces steps 2 and 3 when it is approved. It is a conflict error, rather than outranking anything, for an agent with a step-1 entry or a mention agent whose tag names a level. Role aliases in steps 1 and 2 are expanded through `modelRoles`. Host callers (SDK `runStructuredSubagent({ model })`, `omp cleanse --model`) supply an ungated model ahead of the settings override; the bundled seance agent's `model` overrides its source session's saved model as before.
+Role aliases in configured defaults expand through `modelRoles`. An explicit selection overrides defaults but remains exact: a spawn hook cannot replace its model or reasoning level. The bundled seance agent's selector overrides the source session's saved model separately.
 
 ### Per-call `model`
 
@@ -258,9 +259,12 @@ A `model` that is empty or whitespace, or an empty array, counts as omitted for 
 
 A per-call `model` is exactly one `provider/model-id[@upstream][:level]` (for example `anthropic/claude-sonnet-4-5:high`). The optional `@upstream` pin is supported only by aggregators and is part of the model identity: pinned and unpinned routes are different models for approval. The optional `:level` is clamped to a level the model supports, still bounded by `task.maxEffort`; a literal catalog id wins over splitting a level-shaped suffix. Role aliases (including `@default` and a legacy `pi/<role>` naming a built-in or configured custom role), arrays, comma lists, globs and partial ids fail preflight; when `task.perCallModel` refuses the call, that error is reported first. It is matched literally against the available chat models; there is no fuzzy resolution, and a non-chat model is rejected with that reason.
 
-The model must be one the operator already routes to:
+`task.modelAccess` selects the operator's permission policy. `approved` (default) permits the grants below. `available` permits every available chat model, still subject to `task.perCallModelAllow`, disabled providers, credentials and account restrictions. Both the operator and merged live settings must permit `available`: a project or derived subagent layer can narrow it to `approved`, never broaden it.
+
+In `approved` mode the model must be one the operator already routes to:
 
 - a configured chat role's `modelRoles` value from the operator's layers (global config, `--config` files, runtime overrides or an SDK host's settings, never project settings; non-chat roles such as `image`, `web` and `judge` grant nothing, and role aliases inside a value are not expanded into built-in defaults),
+- the operator's `task.defaultModel` selector,
 - the selected agent's own frontmatter `model`, only when that agent is bundled or user-level, still discovered and not disabled (a project agent's frontmatter never grants directly and a repository agent file cannot add entries to `task.perCallModelAllow`, but its frontmatter model, like any agent's live model, becomes approvable for its per-call children and transitively below them; another agent's frontmatter grants nothing),
 - the parent's live model, only when its routing can be written as one exact selector (several `only` upstreams, an `order` list or any other routing field grants nothing).
 
@@ -272,15 +276,17 @@ How grant values match:
 - A value containing `*` or `?` never grants, in a role or in agent frontmatter. It still routes the role or agent as before; to allow a per-call model the operator names it exactly.
 - Any other value grants the one model it resolves to, using the most-recently-used order and the operator's `modelProviderOrder` captured at spawn or revival; later model switches do not change that resolution.
 
-Catalog membership, credentials, built-in role defaults and saved transcripts grant nothing. `task.perCallModelAllow`, when set, narrows the result: each trimmed entry is compared literally to the model's canonical `provider/id[@upstream]` (no resolution, `:level` split, glob or bare id), and the model must be granted and listed. A project's list narrows it further: the model must be listed by both, so a project list, including an empty one, never replaces the operator's.
+In `approved` mode, catalog membership, credentials, built-in role defaults and saved transcripts alone grant nothing. In both modes `task.perCallModelAllow`, when non-empty, narrows the result to exact canonical `provider/id[@upstream]` identities (no level suffix, glob or fuzzy matching). Operator and project/derived lists are both enforced; an empty list adds no restriction and never removes an operator restriction.
 
 Grants come from the operator's settings or an SDK host's settings instance; a plain `Settings.overlay()` created by a host is its own authority, including its roles and allowlist. Project settings (`.omp/config.yml`, `.omp/settings.json`, `.claude/settings.json` and the other project providers) and settings overlays derived for subagents never grant and defer to the operator's authority; they can only narrow it through `task.perCallModel`, `task.perCallModelAllow` and `task.disabledAgents`. The agent can write a repository's files, and settings are reloaded before every spawn, so a role written there mid-session would otherwise approve its own model. Role and allowlist edits apply live, so removing a role stops it granting.
 
-The operator's own files stay trusted: the global config, `--config` files and user-level agent files grant as written, and anything able to edit them can change grants like any other setting. The gate covers only calls that pass `model`; a call without it routes through `task.agentModelOverrides`, agent frontmatter and `modelRoles`, project layers included, as before.
+The operator's own files stay trusted. The gate covers calls that pass `model`; omitted selectors use the default precedence above, including project defaults. Explicit requests never fall back to that default on failure.
 
-When per-call selection is enabled for a surface, the task/eval tool descriptions list approved role models and the narrowing allowlist. Provider-qualified role values are listed as configured, without checking availability; bare values are resolved through the current registry to exact `provider/model-id` selectors and omitted without one. Glob role values grant nothing and are not listed. The advertisement uses the same literal allowlist comparison as dispatch.
+The `models` tool lists the live registry and evaluates the same policy as dispatch, instead of embedding a stale roster in task/eval prompts. It returns exact selectors, availability, selectability with refusal reasons, supported thinking levels, context limits, pricing, and the effective default. Search with `query`, select an `agent`, use `invocation: "eval"` for agent/workpool permissions, and page with `offset`/`limit`. `includeUnavailable` exposes unavailable or non-chat catalog entries with reasons. Availability is catalog/credential eligibility, not a live inference probe.
 
-A `model` for an agent with a `task.agentModelOverrides` entry fails preflight with a conflict error, so the operator's override is never silently replaced. A `model` for a mention agent whose tag names a level fails the same way, even when it repeats the tagged selector, because per-call selection would cap the user's chosen effort at `task.maxEffort` ([effort level suffix](#effort-level-suffix)). Per-call `model` is not supported for the bundled seance agent, whose own `model` overrides its source session's saved model as before. A project or user agent that shadows the `seance` name is an ordinary agent: its `model` is a per-call `model`, held to every rule here.
+An explicit `model` overrides `task.agentModelOverrides`. Per-call selection is not supported for the bundled seance agent, whose `model` overrides its source session's saved model; a user/project agent shadowing that name follows the ordinary per-call policy. See [models tool](./tools/models.md) for discovery and configuration examples.
+
+A user mention with an explicit `^provider/model:level` remains a user instruction, not a default. Per-call model overrides are refused for that mention agent (even if identical); omit `model` to retain the user's chosen effort. The `models` tool reports these choices as non-overridable.
 
 A per-call worker never moves to an unapproved main-loop model. Retry fallback, context promotion and agent prewalk are off, and an unavailable requested model or missing working credentials fails the call rather than using the parent's model. Its requests never carry a server-side fallback chain, including one a caller supplies. Factory models whose provider attaches a server-side fallback chain are not refused: the per-call request omits the chain, and a response served by another model (or carrying a fallback handoff block) fails the worker before any of its content is forwarded. Every main-loop request is checked against the current operator grants, so an extension replacement or settings change cannot move the worker to an unapproved model; a decision is reused until the settings or the model catalog change. A cold registry at preflight, or a model not yet found during background discovery, is checked again before child-session creation once discovery settles.
 

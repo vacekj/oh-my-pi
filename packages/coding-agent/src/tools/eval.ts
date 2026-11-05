@@ -69,7 +69,6 @@ import {
 	cfgEvalToolsEnabled,
 } from "../eval/settings";
 import { cfgTaskMaxRecursionDepth, perCallModelEnabled } from "../task/settings";
-import { getPerCallModelAdvertisement, type PerCallModelAdvertisement } from "../task/model-approval";
 import { shapeToolResult } from "../spotlight";
 import { cfgToolsMaxTimeout, cfgToolsSpeculativeExecutionEnabled } from "./settings";
 
@@ -202,8 +201,6 @@ export interface EvalToolDescriptionOptions {
 	autoProvision?: boolean;
 	/** `task.perCallModel` accepts `model` for eval: advertise it on `agent()`/`workpool()`. Default: false. */
 	perCallModel?: boolean;
-	/** Operator-owned role selectors and narrowing allowlist; bare values use the current model registry. */
-	perCallModelAdvertisement?: PerCallModelAdvertisement;
 	/** Canonical and wire names currently accepted by the session tool bridge. */
 	toolNames?: readonly string[];
 	/** Configured global ceiling for nonzero cell deadlines. */
@@ -224,7 +221,6 @@ function evalTemplateContext(options: EvalToolDescriptionOptions) {
 		spawnAllowedAgentsText: spawnPolicy.allowedPromptText,
 		autoProvision: options.autoProvision ?? true,
 		perCallModel: options.perCallModel ?? false,
-		perCallModelAdvertisement: options.perCallModelAdvertisement,
 		timeoutMin: TOOL_TIMEOUTS.eval.min,
 		timeoutMax: TOOL_TIMEOUTS.eval.max,
 		configuredMaxTimeout: options.maxTimeout !== undefined && options.maxTimeout > 0 ? options.maxTimeout : undefined,
@@ -405,9 +401,6 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 			inlineTopics: session.isToolActive?.("read") === false,
 			autoProvision: cfgEvalAutoProvision.get(session.settings),
 			perCallModel,
-			perCallModelAdvertisement: perCallModel
-				? getPerCallModelAdvertisement(session.settings, session.getActiveModel?.(), session.modelRegistry)
-				: undefined,
 			toolNames: session.getAdvertisedEvalToolNames?.(),
 			maxTimeout: cfgToolsMaxTimeout.get(session.settings),
 		};

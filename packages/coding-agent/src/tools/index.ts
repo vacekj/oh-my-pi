@@ -68,6 +68,7 @@ import { MemoryEditTool } from "./memory-edit";
 import { MemoryRecallTool } from "./memory-recall";
 import { MemoryReflectTool } from "./memory-reflect";
 import { MemoryRetainTool } from "./memory-retain";
+import { ModelsTool } from "./models";
 import { wrapToolWithMetaNotice } from "./output-meta";
 import { ReadTool } from "./read";
 import type { PlanProposalHandler } from "./resolve";
@@ -147,6 +148,7 @@ export * from "./memory-edit";
 export * from "./memory-recall";
 export * from "./memory-reflect";
 export * from "./memory-retain";
+export * from "./models";
 export * from "./read";
 export * from "./report-tool-issue";
 export * from "./resolve";
@@ -608,6 +610,7 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	context_notes: ContextNotesTool.createIf,
 	new_context: NewContextTool.createIf,
 	task: s => TaskTool.create(s),
+	models: s => new ModelsTool(s),
 	wait: s => new WaitTool(s),
 	todo: s => new TodoTool(s),
 	web_search: s => new WebSearchTool(s),
@@ -712,6 +715,9 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 	// Auto-include AST counterparts when their text-based sibling is present.
 	// Restricted callers own the active list and must not have it widened.
 	if (requestedTools && !restrictToolNames) {
+		if ((requestedTools.includes("task") || requestedTools.includes("eval")) && !requestedTools.includes("models")) {
+			requestedTools.push("models");
+		}
 		if (
 			cfgCompactionExperimentalContextManagement.get(session.settings) &&
 			requestedTools.includes("read") &&

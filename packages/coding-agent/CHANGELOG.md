@@ -14,6 +14,11 @@
 - RPC `set_prompt_overrides` and `OMP_SESSION_PROMPT_OVERRIDES` replace a section's text per session, for template sections and attributed inputs (context files, personality, the tool list, …). The prompt is rebuilt at once; an empty string is a deliberate empty section, and the filter still decides inclusion. Overridden sections keep their id, title and declaration (`origin`/`source`) and report `replacement: { kind: "session", setting: "promptOverrides" }`; the active map is `systemPromptSources.overrides`.
 - RPC `set_model_roles` and `OMP_SESSION_MODEL_ROLES` replace the session's role assignments (role → selector, reasoning suffix included) on a session-local settings overlay. Nothing is written to `config.yml`, other sessions are unaffected, and the main model does not switch; `get_state.modelRoles` reports effective selectors and `modelRoleOverrides` the local map. Spawned subagents inherit the parent's assignments.
 - Extensions can ask the operator before an interactive quit, or cancel it, with `session_before_shutdown`; a further `/exit` or Ctrl+D skips the pending prompts and closes ([#18424](https://github.com/can1357/oh-my-pi/pull/18424) by [@aw1cks](https://github.com/aw1cks))
+- Agents can discover live subagent models, reasoning levels, defaults, prices and selection restrictions with the `models` tool; operator opt-in `task.modelAccess: available` permits any available chat model, with `task.defaultModel` for general-purpose defaults
+
+### Changed
+
+- Explicit subagent model selections override configured agent defaults (`task.agentModelOverrides`), remain exact through spawn hooks and revival, and fail rather than silently substitute another model
 
 ### Fixed
 

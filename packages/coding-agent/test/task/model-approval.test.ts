@@ -13,7 +13,6 @@ import { getProjectAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 import { parseAgent } from "@oh-my-pi/pi-coding-agent/task/agents";
 import {
 	assertPerCallModelApproved,
-	getPerCallModelAdvertisement,
 	parentModelGrantPattern,
 	PerCallModelError,
 	type PerCallModelGrants,
@@ -252,127 +251,34 @@ const rows: Row[] = [
 	},
 ];
 
-describe("per-call model advertisement", () => {
-	it("advertises no built-in role defaults", () => {
-		expect(getPerCallModelAdvertisement(Settings.isolated())).toEqual({
-			roles: [],
-			allowlist: [],
-			parentModelWithheld: false,
-		});
-	});
-
-	it("keeps configured role order and selectors while filtering and deduplicating grants", () => {
-		const settings = Settings.isolated({
-			modelRoles: {
-				smol: "anthropic/claude-haiku-4-5",
-				image: "image/provider",
-				judge: "judge/provider",
-				web: "web/provider",
-				alias: "@smol",
-				legacyAlias: "pi/slow",
-				defaulted: "default",
-				inherited: "inherit",
-				starAlias: "*",
-				slow: "unavailable/model@upstream:high",
-				custom: "anthropic/*, @slow, default, mock/target, anthropic/*, inherit",
-			},
-			"task.perCallModelAllow": ["mock/target", " mock/target ", "unavailable/model@upstream"],
-		});
-		// The allowlist narrows the advertisement: a role is listed only while an entry could admit it.
-		expect(getPerCallModelAdvertisement(settings)).toEqual({
-			roles: [
-				{ role: "slow", patterns: ["unavailable/model@upstream:high"] },
-				{ role: "custom", patterns: ["mock/target"] },
-			],
-			allowlist: ["mock/target", "unavailable/model@upstream"],
-			parentModelWithheld: false,
-		});
-	});
-
-	it.each([{ allowlist: [] }, { allowlist: ["mock/target"] }])(
-		"advertises a bare role as an exact selector with allowlist $allowlist",
-		({ allowlist }) => {
-			const settings = Settings.isolated({
-				modelRoles: { review: "target" },
-				"task.perCallModelAllow": allowlist,
-			});
-			expect(approved(target, { settings, agentName: "worker" })).toBe(true);
-			expect(getPerCallModelAdvertisement(settings, undefined, registry).roles).toEqual([
-				{ role: "review", patterns: ["mock/target"] },
-			]);
-		},
-	);
-
-	it("uses the dispatch allowlist's literal case comparison in advertisements", () => {
-		const mixedCase = createMockModel({ id: "MiniMax-M2" });
-		const modelRegistry = { getAll: () => [mixedCase], getAvailable: () => [mixedCase] };
-		const settings = Settings.isolated({
-			modelRoles: { review: "mock/MiniMax-M2" },
-			"task.perCallModelAllow": ["mock/minimax-m2"],
-		});
-		expect(approved(mixedCase, { settings, agentName: "worker" }, modelRegistry)).toBe(false);
-		expect(getPerCallModelAdvertisement(settings, undefined, modelRegistry).roles).toEqual([]);
-	});
-
-	it("withholds the own-model clause when the parent's routing cannot be written as one selector", () => {
-		const settings = Settings.isolated({ modelRoles: { smol: "mock/target" } });
-		const multiRoute = {
-			...sonnet,
-			compat: { ...sonnet.compat, openRouterRouting: { only: ["anthropic", "google-vertex"] } },
-		} as Model;
-		expect(getPerCallModelAdvertisement(settings, multiRoute).parentModelWithheld).toBe(true);
-		expect(getPerCallModelAdvertisement(settings, sonnet).parentModelWithheld).toBe(false);
-		expect(getPerCallModelAdvertisement(settings).parentModelWithheld).toBe(false);
-	});
-
-	it("withholds the own-model clause when a non-empty allowlist does not list the parent's model", () => {
-		const listed = Settings.isolated({ "task.perCallModelAllow": ["openrouter/anthropic/claude-sonnet-4.5"] });
-		const unlisted = Settings.isolated({ "task.perCallModelAllow": ["mock/target"] });
-		expect(getPerCallModelAdvertisement(listed, sonnet).parentModelWithheld).toBe(false);
-		expect(getPerCallModelAdvertisement(unlisted, sonnet).parentModelWithheld).toBe(true);
-	});
-
-	it("reads live grant authority: derived settings never grant, host overlays do", () => {
-		const root = Settings.isolated({
-			modelRoles: { smol: "mock/target" },
-			"task.perCallModelAllow": ["mock/target"],
-		});
-		const child = root.overlay({ modelRoles: { slow: "mock/other" } }, { derived: true });
-		expect(getPerCallModelAdvertisement(child)).toEqual(getPerCallModelAdvertisement(root));
-		root.setModelRole("smol", "mock/edited");
-		cfgTaskPerCallModelAllow.override(root, ["mock/edited"]);
-		expect(getPerCallModelAdvertisement(child)).toEqual({
-			roles: [{ role: "smol", patterns: ["mock/edited"] }],
-			allowlist: ["mock/edited"],
-			parentModelWithheld: false,
-		});
-
-		const host = root.overlay({
-			modelRoles: { slow: "host/model" },
-			"task.perCallModelAllow": ["host/model"],
-		});
-		expect(getPerCallModelAdvertisement(host)).toEqual({
-			roles: [{ role: "slow", patterns: ["host/model"] }],
-			allowlist: ["host/model"],
-			parentModelWithheld: false,
-		});
-	});
-
-	it("advertises only what both the operator's and a derived allowlist admit", () => {
-		const root = Settings.isolated({
-			modelRoles: { smol: "mock/target", slow: "mock/other" },
-			"task.perCallModelAllow": ["mock/target", "mock/other"],
-		});
-		const child = root.overlay({ "task.perCallModelAllow": ["mock/other", "mock/extra"] }, { derived: true });
-		expect(getPerCallModelAdvertisement(child)).toEqual({
-			roles: [{ role: "slow", patterns: ["mock/other"] }],
-			allowlist: ["mock/other"],
-			parentModelWithheld: false,
-		});
-	});
-});
-
 describe("per-call model grants", () => {
+	it("allows catalog-wide selection only through operator settings and keeps allowlists live", () => {
+		const root = Settings.isolated({ "task.modelAccess": "available" });
+		const child = root.overlay({}, { derived: true });
+		const grants = { settings: child, agentName: "worker" };
+		expect(approved(target, grants)).toBe(true);
+		expect(approved(image, grants)).toBe(false);
+		cfgTaskPerCallModelAllow.override(root, ["mock/other"]);
+		expect(approved(target, grants)).toBe(false);
+		expect(approved(other, grants)).toBe(true);
+		const untrusted = Settings.isolated().overlay({ "task.modelAccess": "available" }, { derived: true });
+		expect(approved(target, { settings: untrusted, agentName: "worker" })).toBe(false);
+		const narrowed = root.overlay({ "task.modelAccess": "approved" }, { derived: true });
+		expect(approved(other, { settings: narrowed, agentName: "worker" })).toBe(false);
+	});
+
+	it("rejects a previously admitted model when credentials or provider availability disappear", () => {
+		const settings = Settings.isolated({ "task.modelAccess": "available" });
+		const grants = { settings, agentName: "worker" };
+		const catalog = [target];
+		let available = catalog;
+		const source = { getAll: () => catalog, getAvailable: () => available };
+		expect(approved(target, grants, source)).toBe(true);
+		available = [];
+		expect(approved(target, grants, source)).toBe(false);
+		available = catalog;
+		expect(approved(target, grants, source)).toBe(true);
+	});
 	it.each(rows)("$name", row => {
 		const grants: PerCallModelGrants = {
 			settings: row.overlay
@@ -524,7 +430,6 @@ describe("project settings and per-call grants", () => {
 		expect(approved(other, grants)).toBe(false);
 		// The operator's own value still grants beneath a project override of the same role.
 		expect(approved(target, grants)).toBe(true);
-		expect(getPerCallModelAdvertisement(settings).roles).toEqual([{ role: "review", patterns: ["mock/target"] }]);
 	});
 
 	it.each<{ operator: string[]; repository: string[]; admitted: string[] }>([

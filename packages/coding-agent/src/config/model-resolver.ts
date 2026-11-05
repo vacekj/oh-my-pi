@@ -38,6 +38,7 @@ import { type GeneratedProvider, getBundledModels, modelsAreEqual } from "@oh-my
 import { modelKind } from "@oh-my-pi/pi-catalog/types";
 import { DEFAULT_MODEL_PER_PROVIDER } from "@oh-my-pi/pi-catalog/provider-models";
 import { fuzzyMatch } from "@oh-my-pi/pi-tui";
+import { cfgTaskDefaultModel } from "../task/settings";
 import { logger } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import {
@@ -1363,6 +1364,13 @@ function resolveEffectiveAgentModelSelection(
 	const configuredAgentPatterns = resolveConfiguredModelPatterns(agentModel, settings);
 	const singleAgentPattern = normalizedAgentPatterns.length === 1 ? normalizedAgentPatterns[0] : undefined;
 	const agentInheritsSessionModel = singleAgentPattern ? isSessionInheritedAgentPattern(singleAgentPattern) : false;
+	const defaultModel = settings && cfgTaskDefaultModel.get(settings)?.trim();
+	const taskRole =
+		singleAgentPattern === formatModelRoleAlias("task") ||
+		singleAgentPattern === `${LEGACY_MODEL_ROLE_ALIAS_PREFIX}task`;
+	if (defaultModel && (taskRole || agentInheritsSessionModel || normalizedAgentPatterns.length === 0)) {
+		return { source: defaultModel, patterns: resolveConfiguredModelPatterns(defaultModel, settings) };
+	}
 	if (configuredAgentPatterns.length > 0) {
 		if (
 			singleAgentPattern === formatModelRoleAlias("task") ||

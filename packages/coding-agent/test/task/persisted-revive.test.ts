@@ -1110,7 +1110,7 @@ describe("persisted subagent revival", () => {
 	);
 
 	// Bundled and user frontmatter share one trust branch; bundled stands for both.
-	it.each(["bundled", "role"] as const)(
+	it.each(["bundled", "role", "catalog"] as const)(
 		"keeps current %s grants when a nested worker's parent is unavailable",
 		async grant => {
 			const cwd = makeTempDir("@pi-revive-independent-grant-");
@@ -1122,7 +1122,7 @@ describe("persisted subagent revival", () => {
 						description: "selected",
 						systemPrompt: "work",
 						source: "bundled",
-						model: grant === "role" ? undefined : ["mock/independent"],
+						model: grant === "bundled" ? ["mock/independent"] : undefined,
 					},
 				],
 				projectAgentsDir: null,
@@ -1142,7 +1142,13 @@ describe("persisted subagent revival", () => {
 			});
 			const ref = { ...createRef(sessionFile), parentId: "unavailable-parent" };
 			const reviver = await createFactory(cwd, undefined, {
-				settings: Settings.isolated(grant === "role" ? { modelRoles: { review: "mock/independent" } } : {}),
+				settings: Settings.isolated(
+					grant === "role"
+						? { modelRoles: { review: "mock/independent" } }
+						: grant === "catalog"
+							? { "task.modelAccess": "available" }
+							: {},
+				),
 				modelRegistry: stubRegistry([target]),
 			})(ref);
 			if (!reviver) throw new Error("Expected a persisted reviver");

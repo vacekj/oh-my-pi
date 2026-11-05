@@ -236,6 +236,8 @@ export interface EffectiveSubagentPolicy {
 	enableIrc: boolean;
 	/** Caller `effort` hint to apply; dropped when the agent's level comes from the user's `^model:level` tag. */
 	effort?: TaskEffort;
+	/** A user model tag fixes the model and effort; per-call overrides are refused. */
+	userTaggedEffort?: true;
 }
 
 /** Settled child execution plus data needed by the frontends' own rendering. */
@@ -410,7 +412,6 @@ function preflightPerCallModel(
 	request: StructuredSubagentRequest,
 	selector: unknown,
 	agent: AgentDefinition,
-	hasModelOverride: boolean,
 	userTaggedEffort: boolean,
 	parentModelPattern: string | undefined,
 ): PerCallModelGrants {
@@ -422,11 +423,6 @@ function preflightPerCallModel(
 	const disabled = perCallModelDisabledReason(settings, request.invocationKind);
 	if (disabled) fail(disabled);
 	if (isBundledSeance(agent)) fail(`Per-call model is not supported for the \`${SEANCE_AGENT_NAME}\` agent.`);
-	if (hasModelOverride) {
-		fail(
-			`Per-call model conflicts with task.agentModelOverrides for agent "${agent.name}". Omit model to use the configured override.`,
-		);
-	}
 	if (userTaggedEffort) {
 		fail(
 			`Per-call model conflicts with the user's \`^model:level\` tag for agent "${agent.name}". Omit model to use the tagged model and effort.`,
@@ -610,7 +606,6 @@ export async function resolveEffectiveSubagentPolicy(
 					request,
 					perCallSelector,
 					agent,
-					Object.hasOwn(agentModelOverrides, agentName),
 					userTaggedEffort,
 					// A multi-upstream or otherwise richer parent route cannot grant a simpler selector.
 					parentActiveModel
@@ -674,6 +669,7 @@ export async function resolveEffectiveSubagentPolicy(
 				(request.session.enableIrc !== false &&
 					isIrcEnabled(request.session.settings, request.session.taskDepth ?? 0))),
 		effort: userTaggedEffort ? undefined : request.effort,
+		userTaggedEffort: userTaggedEffort ? true : undefined,
 	};
 }
 
@@ -711,6 +707,12 @@ async function applySpawnHook(
 	if (spawnResult?.model === undefined) return policy;
 	const replacement = resolveConfiguredModelPatterns(spawnResult.model, request.session.settings);
 	if (replacement.length === 0) return policy;
+	if (policy.perCallModelGrants && (replacement.length !== 1 || replacement[0] !== policy.modelOverride?.[0])) {
+		throw new StructuredSubagentError(
+			"preflight",
+			"A spawn hook cannot replace an explicitly selected subagent model or reasoning level.",
+		);
+	}
 	return { ...policy, modelOverride: replacement, modelRoute: spawnResult.note };
 }
 

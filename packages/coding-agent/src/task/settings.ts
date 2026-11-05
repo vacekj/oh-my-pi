@@ -344,12 +344,48 @@ export const cfgTaskPerCallModel = register({
 		group: "Subagents",
 		label: "Per-Call Model",
 		description:
-			"Whether a subagent call may pick its model with one exact provider/model-id[@upstream][:level] selector. An @upstream pin is part of the model identity and is supported only by aggregators. Only models the configuration already routes to are accepted. Project settings can turn it off but not on, and never approve a model.",
+			"Whether a subagent call may pick one exact provider/model-id[@upstream][:level]. task.modelAccess controls eligible models; project settings can narrow access but cannot grant it.",
 		options: [
 			{ value: "off", label: "Off", description: "Reject `model` on task items and eval agent()/workpool()" },
 			{ value: "eval", label: "Eval only", description: "Accept `model` in eval agent() and workpool() only" },
 			{ value: "on", label: "On", description: "Accept `model` on task items and in eval agent()/workpool()" },
 		],
+	},
+});
+
+export const cfgTaskModelAccess = register({
+	id: "task.modelAccess",
+	type: "enum",
+	values: ["approved", "available"] as const,
+	default: "approved",
+	ui: {
+		tab: "tasks",
+		group: "Subagents",
+		label: "Subagent Model Access",
+		description:
+			"Allow configured model grants only, or every available chat model. Only operator settings can broaden access; allowlists and provider/account restrictions still apply.",
+		options: [
+			{ value: "approved", label: "Approved models" },
+			{ value: "available", label: "Available chat models" },
+		],
+	},
+});
+
+/** Both operator and live layers must allow catalog-wide selection. */
+export function availableSubagentModelsEnabled(settings: Settings): boolean {
+	return [settings.grantAuthority(), settings].every(layers => cfgTaskModelAccess.get(layers) === "available");
+}
+
+export const cfgTaskDefaultModel = register({
+	id: "task.defaultModel",
+	type: "string",
+	default: undefined,
+	ui: {
+		tab: "tasks",
+		group: "Subagents",
+		label: "Default Subagent Model",
+		description:
+			"Default selector for general-purpose and model-inheriting agents. Agent-specific defaults and explicit per-call models take precedence. Unset uses the task role or parent model.",
 	},
 });
 

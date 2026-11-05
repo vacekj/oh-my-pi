@@ -391,6 +391,18 @@ The catalog below highlights common settings; it is not the complete schema. `om
 
 `modelRoles` assigns the primary selector for each workload. `retry.fallbackChains` supplies its ordered fallbacks; keep provider/backend choice out of service-specific settings. Chat selectors may carry a thinking suffix (`:off`, `:minimal`, `:low`, `:medium`, `:high`, `:xhigh`, `:max`, `:auto`, or `:inherit`). Non-chat runners do not use chat thinking budgets. Role values can also contain ordered comma-separated selectors or role aliases such as `@smol`; the role's fallback chain is configured separately.
 
+Subagent model choice is configured separately from session selection:
+
+```yaml
+task:
+   perCallModel: on
+   modelAccess: available
+   defaultModel: "@default:high"
+   maxEffort: max
+```
+
+`task.modelAccess` defaults to `approved` (operator-configured grants); `available` permits any available chat model. Only operator settings may broaden it; project and derived layers may narrow it. `task.perCallModelAllow` optionally restricts exact model identities in either mode. `task.defaultModel` supplies a default for general-purpose/model-inheriting agents; specialist defaults remain intact. `task.agentModelOverrides` selects per-agent defaults, not locks: explicit admitted `model` wins. The `models` tool exposes live choices, supported thinking levels, effective defaults and refusal reasons. See [subagent model selection](./task-agent-discovery.md#per-call-model).
+
 ```yaml
 modelRoles:
    default: anthropic/claude-sonnet-4-5

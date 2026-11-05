@@ -108,7 +108,7 @@ describe("eval tool description", () => {
 	});
 
 	// Advertisement content is covered through the task tool (task-schema.test.ts); this pins the eval gate.
-	it("advertises approved agent()/workpool() selectors only while task.perCallModel is not off", () => {
+	it("points agent()/workpool() model selection at the models tool only while task.perCallModel is not off", () => {
 		for (const mode of ["off", "on", "eval"] as const) {
 			const tool = new EvalTool(
 				makeSession({
@@ -116,25 +116,18 @@ describe("eval tool description", () => {
 					settings: {
 						"task.perCallModel": mode,
 						modelRoles: { smol: "anthropic/claude-haiku-4-5", slow: "openai/gpt-5.5" },
-						"task.perCallModelAllow": ["openai/gpt-5.5"],
 					},
 				}),
 			);
 			const texts = [tool.docTopics().agents ?? "", tool.description];
 			if (mode === "off") {
-				for (const text of texts) {
-					for (const guidance of ["model?=None", "anthropic/claude-haiku-4-5", "openai/gpt-5.5"]) {
-						expect(text).not.toContain(guidance);
-					}
-				}
+				for (const text of texts) expect(text).not.toContain("model?=None");
 				continue;
 			}
 			expect(texts[0].match(/model\?=None/g)).toHaveLength(2);
-			for (const text of texts) {
-				// The allowlist admits only slow's model; smol's would be refused at dispatch.
-				expect(text).toContain("`openai/gpt-5.5` (slow)");
-				expect(text).not.toContain("anthropic/claude-haiku-4-5");
-			}
+			// Live choices come from the `models` tool, never a roster baked into the description.
+			expect(texts[0]).toContain('`models` tool with `invocation: "eval"`');
+			for (const text of texts) expect(text).not.toContain("anthropic/claude-haiku-4-5");
 		}
 	});
 
