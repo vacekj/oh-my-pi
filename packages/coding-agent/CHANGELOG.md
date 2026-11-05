@@ -16,6 +16,10 @@
 - Extensions can ask the operator before an interactive quit, or cancel it, with `session_before_shutdown`; a further `/exit` or Ctrl+D skips the pending prompts and closes ([#18424](https://github.com/can1357/oh-my-pi/pull/18424) by [@aw1cks](https://github.com/aw1cks))
 - Agents can discover live subagent models, reasoning levels, defaults, prices and selection restrictions with the `models` tool; operator opt-in `task.modelAccess: available` permits any available chat model, with `task.defaultModel` for general-purpose defaults
 
+### Removed
+
+- Removed Auto-QA tool issue reporting: the `xd://report_issue` device and its system-prompt instruction, the consent popup, the `omp grievances` command, the `dev.autoqa`, `dev.autoqaConsent` and `dev.autoqaPush.*` settings, and the `PI_AUTO_QA*` environment variables. Saved `dev.*` keys are dropped from config.yml; an existing `autoqa.db` is no longer read or pushed
+
 ### Changed
 
 - Explicit subagent model selections override configured agent defaults (`task.agentModelOverrides`), remain exact through spawn hooks and revival, and fail rather than silently substitute another model

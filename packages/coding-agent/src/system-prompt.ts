@@ -645,8 +645,6 @@ export interface BuildSystemPromptOptions {
 	xdevTools?: Array<{ name: string; summary: string; dynamic?: boolean }>;
 	/** Full docs + JSON schema for every `xd://`-mounted tool, inlined into the protocol section so no discovery `read` is needed. */
 	xdevDocs?: string;
-	/** Whether Auto-QA grievance reporting is enabled; renders the `xd://report_issue` note. */
-	autoQaEnabled?: boolean;
 	/** ovnfs command when its binary is found (`ovnfsCommand`); renders the separate-checkout guidance. */
 	ovnfs?: string;
 	/** Whether active `write` is restricted to xd:// dispatch and the plan artifact sandbox. */
@@ -743,7 +741,6 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		reactions = false,
 		xdevTools = [],
 		xdevDocs = "",
-		autoQaEnabled = false,
 		ovnfs,
 		writeTransportOnly = false,
 		subagent = false,
@@ -1238,7 +1235,6 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 				{ id: "xdev-docs", kind: "xdev-docs", label: "xd:// device docs", setting: optionSettings.xdevDocs },
 				xdevDocs,
 			),
-			autoQaEnabled,
 			ovnfs,
 			writeTransportOnly,
 			subagent,
@@ -1334,7 +1330,6 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 			["securityEnabled", securityEnabled],
 			["settingsApproval", settingsApproval],
 			["outReplies", outReplies],
-			["autoQaEnabled", autoQaEnabled],
 			["writeTransportOnly", writeTransportOnly],
 			["subagent", subagent],
 		];

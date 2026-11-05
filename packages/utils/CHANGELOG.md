@@ -5,6 +5,9 @@
 ### Added
 
 - Added a caller-owned `wait` hook to `fetchWithRetry` for shared retry budgets and cancellation.
+### Removed
+
+- Removed `getAutoQaDbPath()`
 
 ## [18.18.2] - 2026-11-08
 

@@ -448,10 +448,9 @@ function stringArrayFromUnknown(value: unknown): string[] {
 
 /**
  * Migrate a v17 leaf rename that used to nest under a boolean parent path
- * (`dev.autoqa.consent` → `dev.autoqaConsent`, `todo.reminders.max` →
- * `todo.remindersMax`). Pre-rename configs left the leaf beneath the parent,
- * so the parent path resolved to an object and truthy checks like
- * `isAutoQaEnabled` treated a consent-only container as "enabled".
+ * (`todo.reminders.max` → `todo.remindersMax`). Pre-rename configs left the
+ * leaf beneath the parent, so the parent path resolved to an object and truthy
+ * checks treated a leaf-only container as "enabled".
  *
  * Handles nested (`{ parent: { leaf } }`) and quoted-dotted (`"parent.leaf"`)
  * legacy sources. An explicit new key always wins; a separately configured
@@ -3565,17 +3564,16 @@ export class Settings {
 			}
 		}
 
-		// v17 renames that used to nest under a boolean parent path:
-		//   dev.autoqa.consent -> dev.autoqaConsent
+		// Auto-QA removal: `dev.autoqa`, `dev.autoqaConsent`, `dev.autoqaPush.*` and
+		// the legacy `dev.autoqa.consent` have no replacement, and no setting lives
+		// under `dev.*`. Dead keys are deleted so they stop lingering in config.yml.
+		delete raw.dev;
+		for (const key of Object.keys(raw)) {
+			if (key.startsWith("dev.")) delete raw[key];
+		}
+
+		// v17 rename that used to nest under a boolean parent path:
 		//   todo.reminders.max -> todo.remindersMax
-		migrateNestedLeafRename(
-			raw,
-			"dev",
-			"autoqa",
-			"consent",
-			"autoqaConsent",
-			value => value === "unset" || value === "granted" || value === "denied",
-		);
 		migrateNestedLeafRename(
 			raw,
 			"todo",

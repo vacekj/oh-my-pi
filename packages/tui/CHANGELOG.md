@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Removed `tools/report-tool-issue` (`REPORT_ISSUE_DEVICE_NAME`, `REPORT_ISSUE_DEVICE_PATH`, `renderReportIssueDeviceCall`, `describeReportIssueDeviceCall`); `write` no longer special-cases `xd://report_issue`
+
 ## [18.18.6] - 2026-11-09
 
 ### Added
