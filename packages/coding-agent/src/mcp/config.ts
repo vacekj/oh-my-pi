@@ -10,6 +10,7 @@ import type { EffectiveExtensionRoots, SourceMeta } from "../capability/types";
 import type { MCPServer } from "../discovery";
 import { loadCapability } from "../discovery";
 import { readMCPConfigFile } from "./config-writer";
+import { getMcpSessionOverrides } from "./session-overrides";
 import type { MCPConfigFile, MCPServerConfig } from "./types";
 
 /** Options for loading MCP configs */
@@ -101,6 +102,7 @@ function convertToLegacyConfig(server: MCPServer): MCPServerConfig {
  * @param options Load options
  */
 export async function loadAllMCPConfigs(cwd: string, options?: LoadMCPConfigsOptions): Promise<LoadMCPConfigsResult> {
+	const sessionOverrides = getMcpSessionOverrides();
 	const enableProjectConfig = options?.enableProjectConfig ?? true;
 	const filterExa = options?.filterExa ?? true;
 	const filterBrowser = options?.filterBrowser ?? false;
@@ -139,6 +141,7 @@ export async function loadAllMCPConfigs(cwd: string, options?: LoadMCPConfigsOpt
 	// differently-named enabled server — otherwise the disabled alias would be
 	// removed downstream and starve the surviving connection.
 	const suppressServer = (server: MCPServer & { _source: SourceMeta }): boolean => {
+		if (Object.hasOwn(sessionOverrides, server.name)) return !sessionOverrides[server.name];
 		if (disabledServers.has(server.name)) return true;
 		if (server.enabled === false && !forcedEnabled.has(server.name)) return true;
 		return false;
@@ -161,6 +164,7 @@ export async function loadAllMCPConfigs(cwd: string, options?: LoadMCPConfigsOpt
 	let sources: Record<string, SourceMeta> = {};
 	for (const server of result.items) {
 		configs[server.name] = convertToLegacyConfig(server);
+		if (Object.hasOwn(sessionOverrides, server.name)) configs[server.name]!.enabled = sessionOverrides[server.name];
 		sources[server.name] = server._source;
 	}
 

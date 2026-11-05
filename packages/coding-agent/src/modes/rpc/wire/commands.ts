@@ -86,6 +86,16 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 
 	{ name: "get_state", doc: "Snapshot the session state.", result: "SessionState" },
 	{
+		name: "set_prompt_sections",
+		doc: "Set additional system prompt sections for subsequent turns.",
+		params: { sections: "string[]" },
+	},
+	{
+		name: "set_mcp_overrides",
+		doc: "Set process-local MCP switches without changing shared configuration.",
+		params: { overrides: "Record<string, boolean>" },
+	},
+	{
 		name: "set_fast_mode",
 		doc: "Enable or disable fast mode for the session.",
 		params: { enabled: "boolean" },

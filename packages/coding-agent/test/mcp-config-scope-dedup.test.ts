@@ -18,6 +18,7 @@ import { clearCache as clearFsCache } from "@oh-my-pi/pi-coding-agent/capability
 import { loadAllMCPConfigs } from "@oh-my-pi/pi-coding-agent/mcp/config";
 import { getConfigRootDir, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
 import "@oh-my-pi/pi-coding-agent/discovery";
+import { setMcpSessionOverrides } from "@oh-my-pi/pi-coding-agent/mcp/session-overrides";
 
 const originalAgentDirEnv = process.env.PI_CODING_AGENT_DIR;
 const fallbackAgentDir = path.join(getConfigRootDir(), "agent");
@@ -49,6 +50,7 @@ describe("MCP scope filtering precedes connection-equivalence deduplication", ()
 	});
 
 	afterEach(async () => {
+		setMcpSessionOverrides({});
 		vi.restoreAllMocks();
 		clearFsCache();
 		if (originalAgentDirEnv) {
@@ -68,6 +70,21 @@ describe("MCP scope filtering precedes connection-equivalence deduplication", ()
 		const result = await loadAllMCPConfigs(projectDir, { enableProjectConfig: false, filterExa: false });
 		expect(Object.keys(result.configs)).toEqual(["usercontext"]);
 		expect(result.sources.usercontext?.level).toBe("user");
+	});
+
+	test("session switches override defaults and restore them without changing files", async () => {
+		await writeMcpJson(path.join(projectDir, ".omp"), { isolated: { ...CONNECTION, enabled: false } });
+		await writeMcpJson(userAgentDir, {});
+		const file = path.join(projectDir, ".omp", "mcp.json");
+		const original = await Bun.file(file).text();
+		setMcpSessionOverrides({ isolated: true });
+		const enabled = await loadAllMCPConfigs(projectDir, { filterExa: false });
+		expect(enabled.configs.isolated?.enabled).toBe(true);
+		setMcpSessionOverrides({ isolated: false });
+		expect((await loadAllMCPConfigs(projectDir, { filterExa: false })).configs.isolated).toBeUndefined();
+		setMcpSessionOverrides({});
+		expect((await loadAllMCPConfigs(projectDir, { filterExa: false })).configs.isolated).toBeUndefined();
+		expect(await Bun.file(file).text()).toBe(original);
 	});
 
 	test("collapses the equivalent alias to the higher-priority project name when enabled", async () => {
