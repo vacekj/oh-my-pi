@@ -89,6 +89,8 @@ export interface BaseKernelOptions<TExecuteOptions extends KernelExecuteOptions 
 	shutdownGraceMs: number;
 	/** Serializes an execution request into the runner's wire protocol. */
 	buildPayload: (code: string, msgId: string, options?: TExecuteOptions) => string;
+	/** Cancels one raw request without interrupting sibling executions. */
+	buildCancelPayload?: (msgId: string) => string;
 }
 
 export type FrameType =
@@ -277,7 +279,7 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 		return await this.#submit(msgId, this.#options.buildPayload(code, msgId, options), options, true);
 	}
 
-	/** Submit a raw runner request without sending SIGINT when its caller cancels. */
+	/** Submit a raw runner request, using targeted cancellation when the runner supports it. */
 	async submitRequest(msgId: string, payload: string, options?: TExecuteOptions): Promise<KernelExecuteResult> {
 		return await this.#submit(msgId, payload, options, false);
 	}
@@ -326,16 +328,23 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 		let requestWritten = false;
 		const requestCancel = () => {
 			if (pending.settled || pending.escalationTimer) return;
-			if (!requestWritten || !interruptOnCancel) {
+			if (!requestWritten || (!interruptOnCancel && !this.#options.buildCancelPayload)) {
 				finalize();
 				return;
 			}
-			void this.interrupt();
+			if (interruptOnCancel) {
+				void this.interrupt();
+			} else if (this.#options.buildCancelPayload) {
+				void this.#writeLine(this.#options.buildCancelPayload(msgId), transportFailed).catch(transportFailed);
+			}
 			const escalation = setTimeout(() => {
 				if (pending.settled) return;
-				logger.warn(`${this.#options.languageName} runner did not respond to SIGINT; terminating subprocess`, {
-					kernelId: this.id,
-				});
+				logger.warn(
+					`${this.#options.languageName} runner did not respond to cancellation; terminating subprocess`,
+					{
+						kernelId: this.id,
+					},
+				);
 				pending.kernelKilled = true;
 				void this.shutdown();
 			}, this.#options.interruptEscalationMs);

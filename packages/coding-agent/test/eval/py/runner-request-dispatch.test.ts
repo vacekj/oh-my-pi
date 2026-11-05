@@ -10,6 +10,8 @@ interface RunnerFrame {
 	revision?: number;
 	digest?: string;
 	admissionRejected?: boolean;
+	cancelled?: boolean;
+	value?: { ok: boolean; value: unknown };
 }
 
 const pythonPath = Bun.env.PYTHON ?? ($which("python3") ? "python3" : "python");
@@ -87,11 +89,12 @@ function spawnRunner(): Runner {
 	};
 }
 
-async function collectDoneOrder(runner: Runner, ids: Set<string>): Promise<RunnerFrame[]> {
+async function collectDoneOrder(runner: Runner, ids: Set<string>, frames?: RunnerFrame[]): Promise<RunnerFrame[]> {
 	const dones: RunnerFrame[] = [];
 	const seen = new Set<string>();
 	while (seen.size < ids.size) {
 		const frame = await runner.nextFrame();
+		frames?.push(frame);
 		if (frame.type === "done" && frame.id && ids.has(frame.id) && !seen.has(frame.id)) {
 			seen.add(frame.id);
 			dones.push(frame);
@@ -106,6 +109,153 @@ async function collectDoneOrder(runner: Runner, ids: Set<string>): Promise<Runne
 // control channel until it finishes -- the regression that a naive fix for the
 // Windows numpy import hang (#7985) would introduce.
 describe("Python runner request dispatch", () => {
+	it("reuses cell-owned async resources and one concurrency gate across repeated tool calls", async () => {
+		const runner = spawnRunner();
+		try {
+			runner.send({
+				id: "setup",
+				code: `
+import asyncio, types
+owner_loop = asyncio.get_running_loop()
+resources = {}
+gate = asyncio.Semaphore(1)
+active = peak = 0
+async def capture(fail=False):
+    global active, peak
+    async with gate:
+        active += 1
+        peak = max(peak, active)
+        try:
+            loop = asyncio.get_running_loop()
+            resources.setdefault(loop, object())
+            await asyncio.sleep(0.01)
+            if fail:
+                raise ValueError("capture failed")
+            return {"same_loop": loop is owner_loop, "resources": len(resources), "peak": peak}
+        finally:
+            active -= 1
+__omp_tools__ = {"capture": types.SimpleNamespace(fn=capture)}
+`,
+			});
+			expect((await collectDoneOrder(runner, new Set(["setup"])))[0].status).toBe("ok");
+			for (let i = 0; i < 8; i++) {
+				const id = `sequential-${i}`;
+				const frames: RunnerFrame[] = [];
+				runner.send({ type: "tool", id, op: "call", name: "capture", args: { fail: i === 3 } });
+				const [done] = await collectDoneOrder(runner, new Set([id]), frames);
+				expect(done.status).toBe(i === 3 ? "error" : "ok");
+				if (i !== 3) {
+					expect(frames.find(frame => frame.type === "reply")?.value?.value).toEqual({
+						same_loop: true,
+						resources: 1,
+						peak: 1,
+					});
+				}
+			}
+			const ids = new Set(Array.from({ length: 6 }, (_, i) => `parallel-${i}`));
+			for (const id of ids) runner.send({ type: "tool", id, op: "call", name: "capture", args: {} });
+			const frames: RunnerFrame[] = [];
+			const dones = await collectDoneOrder(runner, ids, frames);
+			expect(dones.every(frame => frame.status === "ok")).toBe(true);
+			const replies = frames.filter(frame => frame.type === "reply");
+			expect(replies).toHaveLength(ids.size);
+			for (const reply of replies) {
+				expect(reply.value?.value).toEqual({ same_loop: true, resources: 1, peak: 1 });
+			}
+		} finally {
+			await runner.dispose();
+		}
+	});
+
+	it("cancels only the requested async tool and runs its cleanup before acknowledging", async () => {
+		const runner = spawnRunner();
+		try {
+			runner.send({
+				id: "setup",
+				code: `
+import asyncio, types
+cleaned = False
+async def slow():
+    global cleaned
+    try:
+        print("tool-ready", flush=True)
+        await asyncio.sleep(30)
+    finally:
+        await asyncio.sleep(0.01)
+        cleaned = True
+async def probe():
+    return cleaned
+__omp_tools__ = {"slow": types.SimpleNamespace(fn=slow), "probe": types.SimpleNamespace(fn=probe)}
+`,
+			});
+			await collectDoneOrder(runner, new Set(["setup"]));
+			runner.send({ type: "tool", id: "slow", op: "call", name: "slow", args: {} });
+			while (true) {
+				const frame = await runner.nextFrame();
+				if (frame.type === "stdout" && frame.data?.includes("tool-ready")) break;
+			}
+			runner.send({ type: "cancel_tool", id: "slow" });
+			expect((await collectDoneOrder(runner, new Set(["slow"])))[0]).toMatchObject({
+				status: "error",
+				cancelled: true,
+			});
+			runner.send({ type: "tool", id: "probe", op: "call", name: "probe", args: {} });
+			const frames: RunnerFrame[] = [];
+			await collectDoneOrder(runner, new Set(["probe"]), frames);
+			expect(frames.find(frame => frame.type === "reply")?.value?.value).toBe(true);
+		} finally {
+			await runner.dispose();
+		}
+	});
+
+	it("keeps the event loop responsive while a synchronous tool blocks", async () => {
+		const runner = spawnRunner();
+		try {
+			runner.send({
+				id: "setup",
+				code: `
+import asyncio, time, types
+def slow():
+    time.sleep(0.3)
+async def fast():
+    return "responsive"
+__omp_tools__ = {"slow": types.SimpleNamespace(fn=slow), "fast": types.SimpleNamespace(fn=fast)}
+`,
+			});
+			await collectDoneOrder(runner, new Set(["setup"]));
+			runner.send({ type: "tool", id: "slow", op: "call", name: "slow", args: {} });
+			runner.send({ type: "tool", id: "fast", op: "call", name: "fast", args: {} });
+			expect((await collectDoneOrder(runner, new Set(["slow", "fast"]))).map(frame => frame.id)).toEqual([
+				"fast",
+				"slow",
+			]);
+		} finally {
+			await runner.dispose();
+		}
+	});
+
+	it("acknowledges cancellation queued before a tool's first event-loop step", async () => {
+		const runner = spawnRunner();
+		try {
+			runner.send({
+				id: "setup",
+				code: "import asyncio, types\nasync def slow():\n    await asyncio.sleep(30)\n__omp_tools__ = {'slow': types.SimpleNamespace(fn=slow)}",
+			});
+			await collectDoneOrder(runner, new Set(["setup"]));
+			for (let i = 0; i < 10; i++) {
+				const id = `cancel-${i}`;
+				runner.send({ type: "tool", id, op: "call", name: "slow", args: {} });
+				runner.send({ type: "cancel_tool", id });
+				expect((await collectDoneOrder(runner, new Set([id])))[0]).toMatchObject({
+					status: "error",
+					cancelled: true,
+				});
+			}
+		} finally {
+			await runner.dispose();
+		}
+	});
+
 	it("interleaves a fast request past a slow one parked on a top-level await", async () => {
 		if (process.platform === "win32") return; // Windows dispatches serially by design; see _serve_windows.
 		const runner = spawnRunner();

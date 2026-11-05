@@ -21,6 +21,9 @@ const REMOTE_OAUTH = {
 	expires: 5_000,
 	tokenUrl: "https://example.test/token",
 	clientId: "provider-client",
+	region: "us-east-1",
+	inferenceRegion: "eu",
+	activeOrganizationId: "organization-id",
 };
 const REAL_OAUTH = { ...REMOTE_OAUTH, refresh: "real-refresh" };
 const API_KEY = { type: "api_key", key: "secret", source: "login" };
@@ -234,6 +237,7 @@ describe("auth-broker public wire schemas", () => {
 		reject(wireSchemas.oauthCredentialSchema, REMOTE_OAUTH);
 		reject(wireSchemas.remoteOauthCredentialSchema, REAL_OAUTH);
 		reject(wireSchemas.oauthCredentialSchema, { ...REAL_OAUTH, access: "" });
+		reject(wireSchemas.oauthCredentialSchema, { ...REAL_OAUTH, inferenceRegion: "moon" });
 		reject(wireSchemas.apiKeyCredentialSchema, { ...API_KEY, extra: true });
 		reject(wireSchemas.apiKeyCredentialSchema, { ...API_KEY, source: "environment" });
 		reject(wireSchemas.credentialUploadRequestSchema, { provider: "", credential: REAL_OAUTH });

@@ -37,6 +37,7 @@ import asyncio
 import base64
 import builtins
 import codecs
+import concurrent.futures
 import contextvars
 import functools
 import inspect
@@ -2710,13 +2711,20 @@ def _jsonable(value: Any) -> Any:
     return repr(value)
 
 
-def _handle_tool_request(req: dict) -> None:
-    """Describe or invoke a kernel-defined tool on a dedicated runner thread."""
+_TOOL_REQUESTS: dict[str, tuple[concurrent.futures.Future, dict]] = {}
+
+
+async def _handle_tool_request(req: dict) -> None:
+    """Keep async tools on the same persistent loop as their defining cells."""
     rid = str(req.get("id"))
     token = _CURRENT_RID.set(rid)
     status = "ok"
+    cancelled = False
     _emit({"type": "started", "id": rid})
     try:
+        req["_tool_started"] = True
+        if req.get("_tool_cancelled"):
+            raise asyncio.CancelledError()
         tools = _STATE.user_ns.get("__omp_tools__") or {}
         op = req.get("op")
         if op == "describe":
@@ -2731,13 +2739,32 @@ def _handle_tool_request(req: dict) -> None:
             spec = tools.get(name)
             if spec is None:
                 raise KeyError(f"tool {name!r} is not defined")
-            result = spec.fn(**(req.get("args") or {}))
+            args = req.get("args") or {}
+            if inspect.iscoroutinefunction(spec.fn):
+                result = spec.fn(**args)
+            else:
+                # Synchronous tools must not block the kernel's event loop.
+                # A running thread cannot be cancelled: wait for it before
+                # acknowledging cancellation, so the host can escalate a stuck
+                # tool to kernel shutdown rather than silently abandon it.
+                worker = asyncio.create_task(asyncio.to_thread(spec.fn, **args))
+                try:
+                    result = await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    result = await worker
+                    if inspect.iscoroutine(result):
+                        result.close()
+                    raise
             if inspect.isawaitable(result):
-                result = asyncio.run(result)
+                result = await result
             envelope = {"ok": True, "value": _jsonable(result)}
         else:
             raise ValueError(f"unknown tool operation {op!r}")
         _emit({"type": "reply", "id": rid, "value": _json_safe(envelope)})
+    except asyncio.CancelledError:
+        status = "error"
+        cancelled = True
+        _emit_error(rid, asyncio.CancelledError("Tool execution cancelled"))
     except BaseException as exc:  # noqa: BLE001 - protocol errors must settle the request
         status = "error"
         _emit_error(rid, exc)
@@ -2749,10 +2776,30 @@ def _handle_tool_request(req: dict) -> None:
                 "id": rid,
                 "status": status,
                 "executionCount": _STATE.execution_count,
-                "cancelled": False,
+                "cancelled": cancelled,
             }
         )
         _CURRENT_RID.reset(token)
+
+
+def _start_tool_request(req: dict, loop: asyncio.AbstractEventLoop) -> None:
+    # Control-channel reads/cancels run on one reader thread (or serially on
+    # Windows). The future is registered before another control line is read.
+    rid = str(req.get("id"))
+    future = asyncio.run_coroutine_threadsafe(_handle_tool_request(req), loop)
+    _TOOL_REQUESTS[rid] = (future, req)
+    future.add_done_callback(lambda done: _TOOL_REQUESTS.pop(rid, None))
+
+
+def _cancel_tool_request(req: dict) -> None:
+    pending = _TOOL_REQUESTS.get(str(req.get("id")))
+    if pending is not None:
+        future, request = pending
+        request["_tool_cancelled"] = True
+        # A task cancelled before its first step cannot emit a done frame.
+        # Let such a task start and acknowledge the queued cancellation itself.
+        if request.get("_tool_started"):
+            future.cancel()
 
 
 async def _handle_request_async(req: dict) -> None:
@@ -2957,12 +3004,10 @@ def _read_stdin(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue, stdin) ->
         if req is None:
             continue
         if req.get("type") == "tool":
-            threading.Thread(
-                target=_handle_tool_request,
-                args=(req,),
-                name=f"omp-tool-{req.get('id')}",
-                daemon=True,
-            ).start()
+            _start_tool_request(req, loop)
+            continue
+        if req.get("type") == "cancel_tool":
+            _cancel_tool_request(req)
             continue
         loop.call_soon_threadsafe(queue.put_nowait, req)
     loop.call_soon_threadsafe(queue.put_nowait, {"type": "exit"})
@@ -3055,12 +3100,10 @@ async def _serve_windows(loop: asyncio.AbstractEventLoop, stdin) -> None:
             _emit_shadow_plan(req)
             continue
         if req.get("type") == "tool":
-            threading.Thread(
-                target=_handle_tool_request,
-                args=(req,),
-                name=f"omp-tool-{req.get('id')}",
-                daemon=True,
-            ).start()
+            _start_tool_request(req, loop)
+            continue
+        if req.get("type") == "cancel_tool":
+            _cancel_tool_request(req)
             continue
         if not _admit_shadow_run(req):
             continue

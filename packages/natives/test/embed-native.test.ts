@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -45,6 +45,54 @@ describe("native addon embedding", () => {
 			expect(second).toEqual(first);
 		} finally {
 			await fs.rm(nativeDir, { recursive: true, force: true });
+		}
+	});
+
+	it("reuses a cached native addon without recompressing it", async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-natives-embed-cache-"));
+		const options = {
+			platform: "win32",
+			arch: "arm64",
+			nativeDir: root,
+			version: "18.1.1",
+			cacheDir: path.join(root, "cache"),
+		};
+		const file = path.join(root, "pi_natives.win32-arm64.node");
+		try {
+			await Bun.write(file, "binaryPI_NATIVES_VERSION_STAMP:18.1.1\0");
+			const first = await embeddedAddonFiles(options);
+			const compress = vi.spyOn(Bun, "zstdCompress").mockRejectedValue(new Error("must reuse the cached frame"));
+			try {
+				expect(await embeddedAddonFiles(options)).toEqual(first);
+				expect(compress).not.toHaveBeenCalled();
+			} finally {
+				compress.mockRestore();
+			}
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("rebuilds cached native frames when addon contents change or the cache is corrupt", async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-natives-embed-cache-"));
+		const cacheDir = path.join(root, "cache");
+		const options = { platform: "win32", arch: "arm64", nativeDir: root, version: "18.1.1", cacheDir };
+		const file = path.join(root, "pi_natives.win32-arm64.node");
+		const changed = "changedPI_NATIVES_VERSION_STAMP:18.1.1\0";
+		try {
+			await Bun.write(file, "originalPI_NATIVES_VERSION_STAMP:18.1.1\0");
+			await embeddedAddonFiles(options);
+			await Bun.write(file, changed);
+			await fs.utimes(file, 1, 1);
+			const updated = await embeddedAddonFiles(options);
+			const framePath = `${await fs.realpath(file)}.zst`;
+			expect(Buffer.from(await Bun.zstdDecompress(updated[framePath] as Uint8Array)).toString()).toBe(changed);
+
+			for (const entry of await fs.readdir(cacheDir)) await Bun.write(path.join(cacheDir, entry), "corrupt");
+			const repaired = await embeddedAddonFiles(options);
+			expect(Buffer.from(await Bun.zstdDecompress(repaired[framePath] as Uint8Array)).toString()).toBe(changed);
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
 		}
 	});
 

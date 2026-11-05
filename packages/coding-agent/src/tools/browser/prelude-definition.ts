@@ -4,7 +4,7 @@ import { redactUrlForLog } from "../../mcp/json-rpc";
 import relayGuidance from "../../prompts/system/browser-relay.md" with { type: "text" };
 import browserDescription from "../../prompts/tools/browser.md" with { type: "text" };
 import type { ToolSession } from "../../sdk";
-// @ts-expect-error Bun imports this JavaScript source as text instead of evaluating its module shape.
+// Bun imports this JavaScript source as text instead of evaluating its module shape.
 import browserJavascript from "./prelude.js" with { type: "text" };
 import browserPython from "./prelude.py" with { type: "text" };
 import type { BrowserKind } from "./registry";

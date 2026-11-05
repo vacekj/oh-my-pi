@@ -8,7 +8,7 @@ import type { EvalPreludeContext, EvalPreludeDefinition } from "../eval/preludes
 import { cfgRatchetEnabled } from "../tools/settings";
 import ratchetDocumentation from "../prompts/tools/ratchet.md" with { type: "text" };
 import type { ToolSession } from "../tools";
-// @ts-expect-error Bun imports this JavaScript source as text instead of evaluating its module shape.
+// Bun imports this JavaScript source as text instead of evaluating its module shape.
 import ratchetJavascript from "./prelude.js" with { type: "text" };
 import ratchetPython from "./prelude.py" with { type: "text" };
 import {

@@ -14,7 +14,7 @@ import {
 	archiveSession,
 	archiveSessions,
 } from "./archive";
-// @ts-expect-error Bun imports this JavaScript source as text instead of evaluating its module shape.
+// Bun imports this JavaScript source as text instead of evaluating its module shape.
 import archiveJavascript from "./prelude.js" with { type: "text" };
 import archivePython from "./prelude.py" with { type: "text" };
 

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Python-defined async tools now reuse their defining kernel's event loop, and cancelling a tool waits for its cleanup instead of leaving it running.
+
 ## [18.16.0] - 2026-11-02
 
 ### Added

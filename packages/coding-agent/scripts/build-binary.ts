@@ -89,6 +89,7 @@ async function main(): Promise<void> {
 			outfile: outputPath,
 			transformersVersion,
 			native: crossBuild ?? { platform: process.platform, arch: process.arch },
+			nativeCacheDir: path.join(repoRoot, "node_modules", ".cache", "omp-native-embed"),
 			target: crossBuild?.target,
 			executablePath: Bun.env.BUN_COMPILE_EXECUTABLE_PATH || undefined,
 			skipBuiltinCodesign: shouldAdhocSign,

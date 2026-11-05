@@ -245,6 +245,75 @@ describe.skipIf(!SHOULD_RUN)("python runner subprocess", () => {
 		}
 	});
 
+	it("aborting a Python tool waits for its async cleanup without interrupting the retained kernel", async () => {
+		using tempDir = TempDir.createSync("@python-tool-cancel-");
+		const kernel = await PythonKernel.start({ cwd: tempDir.path() });
+		try {
+			const setup = await executePythonWithKernel(
+				kernel,
+				`
+import asyncio, types
+started = asyncio.Event()
+cleaned = False
+async def slow():
+    global cleaned
+    try:
+        started.set()
+        await asyncio.sleep(30)
+    finally:
+        await asyncio.sleep(0.02)
+        cleaned = True
+__omp_tools__["slow"] = types.SimpleNamespace(fn=slow)
+`,
+			);
+			expect(setup.exitCode).toBe(0);
+			const controller = new AbortController();
+			const call = kernel.invokeTool({ op: "call", name: "slow", args: {} }, { signal: controller.signal });
+			const ready = await executePythonWithKernel(kernel, "await started.wait()", { timeoutMs: 2000 });
+			expect(ready.exitCode).toBe(0);
+			controller.abort();
+			expect((await call).cancelled).toBe(true);
+			const next = await executePythonWithKernel(kernel, "print(cleaned)");
+			expect(next.exitCode).toBe(0);
+			expect(next.output.trim()).toBe("True");
+			expect(kernel.isAlive()).toBe(true);
+		} finally {
+			await kernel.shutdown();
+		}
+	});
+
+	it("escalates cancellation of an uninterruptible synchronous tool instead of leaving it running", async () => {
+		using tempDir = TempDir.createSync("@python-sync-tool-cancel-");
+		const kernel = await PythonKernel.start({ cwd: tempDir.path() });
+		try {
+			const setup = await executePythonWithKernel(
+				kernel,
+				`
+import asyncio, threading, time, types
+started = threading.Event()
+def stuck():
+    started.set()
+    time.sleep(30)
+__omp_tools__["stuck"] = types.SimpleNamespace(fn=stuck)
+`,
+			);
+			expect(setup.exitCode).toBe(0);
+			const controller = new AbortController();
+			const call = kernel.invokeTool({ op: "call", name: "stuck", args: {} }, { signal: controller.signal });
+			expect(
+				(await executePythonWithKernel(kernel, "await asyncio.to_thread(started.wait)", { timeoutMs: 2000 }))
+					.exitCode,
+			).toBe(0);
+			controller.abort();
+			const result = await call;
+			expect(result.cancelled).toBe(true);
+			expect(result.kernelKilled).toBe(true);
+			expect(kernel.isAlive()).toBe(false);
+		} finally {
+			await kernel.shutdown();
+		}
+	}, 15_000);
+
 	it("executes file-backed cells in the retained namespace with script import semantics", async () => {
 		using tempDir = TempDir.createSync("@python-runner-file-");
 		const scriptDir = path.join(tempDir.path(), "scripts");

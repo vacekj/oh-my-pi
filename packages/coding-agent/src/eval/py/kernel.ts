@@ -212,6 +212,7 @@ export class PythonKernel extends BaseKernel<PythonKernelExecuteOptions> {
 			languageName: "Python",
 			traceIpc: TRACE_IPC,
 			exitPayload: JSON.stringify({ type: "exit" }),
+			buildCancelPayload: id => JSON.stringify({ type: "cancel_tool", id }),
 			interruptEscalationMs: INTERRUPT_ESCALATION_MS,
 			shutdownGraceMs: SHUTDOWN_GRACE_MS,
 			buildPayload: (code, msgId, opts) =>
