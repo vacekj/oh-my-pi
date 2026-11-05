@@ -11,6 +11,7 @@
 - Removed `SPINNER_ADVANCE_MS`; spinners follow the shared spinner clock (`spinnerInterval()`). `sharedSpinnerFrame` moved from `chat/tool-execution` to `spinner-clock` and reads `Date.now()` by default ([#14240](https://github.com/can1357/oh-my-pi/pull/14240) by [@mccraigmccraig](https://github.com/mccraigmccraig))
 - Removed `formatMeta` (`render/render-utils`); no renderer joins header metadata through it anymore ([#18104](https://github.com/can1357/oh-my-pi/pull/18104) by [@JustasMasiulis](https://github.com/JustasMasiulis))
 - `TranscriptContainer.nativeBlocks()` and `Composer.describeSurface()` take the frame's `DescribeContext` ([#17997](https://github.com/can1357/oh-my-pi/pull/17997) by [@materemias](https://github.com/materemias))
+- Removed `tools/report-tool-issue` (`REPORT_ISSUE_DEVICE_NAME`, `REPORT_ISSUE_DEVICE_PATH`, `renderReportIssueDeviceCall`, `describeReportIssueDeviceCall`); `write` no longer special-cases `xd://report_issue`
 
 ### Added
 
