@@ -3534,6 +3534,18 @@ class WireClient:
         params: dict[str, object] = {}
         return parse_session_state(self._command("get_state", params), "get_state")
 
+    def set_prompt_sections(self, sections: Sequence[str]) -> None:
+        """Set additional system prompt sections for subsequent turns."""
+        params: dict[str, object] = {}
+        params["sections"] = list(sections)
+        self._command("set_prompt_sections", params)
+
+    def set_mcp_overrides(self, overrides: dict[str, bool]) -> None:
+        """Set process-local MCP switches without changing shared configuration."""
+        params: dict[str, object] = {}
+        params["overrides"] = overrides
+        self._command("set_mcp_overrides", params)
+
     def set_fast_mode(self, enabled: bool) -> FastModeResult:
         """Enable or disable fast mode for the session."""
         params: dict[str, object] = {}

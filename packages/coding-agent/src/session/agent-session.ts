@@ -509,6 +509,7 @@ import { buildSessionMetadata } from "./session-metadata";
 import { SessionProviderBoundary, type SessionProviderBoundaryHost } from "./session-provider-boundary";
 import { SessionStatsTracker, type SessionStatsTrackerHost } from "./session-stats";
 import { promptDigestOfEntry, SessionTools, type SessionToolsHost } from "./session-tools";
+import { getSessionPromptParts } from "./prompt-sections";
 import { resolveWebsocketPreference } from "./settings-stream-fn";
 import type { ShakeMode, ShakeResult } from "./shake-types";
 import { ToolChoiceQueue } from "./tool-choice-queue";
@@ -9367,7 +9368,15 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			const sourceBase = this.#tools.baseSystemPrompt;
 			const basePreparation = await this.#tools.buildSystemPromptForAgentStart(prompt, isCurrent, signal);
 			if (!isCurrent()) return cancelled;
-			const result = await this.#extensionRunner?.emitBeforeAgentStart(prompt, images, basePreparation.systemPrompt);
+			const additionalParts = getSessionPromptParts();
+			const preparedPrompt = additionalParts.length
+				? [...basePreparation.systemPrompt, ...additionalParts]
+				: basePreparation.systemPrompt;
+			const extensionResult = await this.#extensionRunner?.emitBeforeAgentStart(prompt, images, preparedPrompt);
+			const result = {
+				...extensionResult,
+				systemPrompt: extensionResult?.systemPrompt ?? (additionalParts.length ? preparedPrompt : undefined),
+			};
 			if (!isCurrent()) return cancelled;
 			// Overrides are opaque replacements, not string patches. Re-run only policy preparation
 			// against the winning base; discard this attempt's returned context and staged memory.

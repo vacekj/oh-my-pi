@@ -91,6 +91,7 @@ import {
 } from "./rpc-prompt-results";
 import { RpcSessionEventForwarder } from "./rpc-session-events";
 import { isSessionSettled } from "../../session/session-settle";
+import { setSessionPromptSections } from "../../session/prompt-sections";
 import { RpcSessionSettleWatcher, watchedScheduledTurnProbe } from "./rpc-session-settle";
 import { RpcSubagentRegistry, readRpcSubagentTranscript, resolveOwnedLiveSubagent } from "./rpc-subagents";
 import type {
@@ -2253,6 +2254,20 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			// State
 			// =================================================================
 
+			case "set_mcp_overrides": {
+				if (session.isCompacting || !isSessionSettled(session, goalTurnScheduled))
+					return error(id, command.type, "Wait for the agent to finish", "session_busy");
+				if (!options.mcpManager) return error(id, command.type, "MCP manager is unavailable", "unsupported");
+				await options.mcpManager.reconcileSessionOverrides(command.overrides);
+				await session.refreshMCPTools(options.mcpManager.getTools());
+				return success(id, command.type);
+			}
+			case "set_prompt_sections": {
+				if (session.isCompacting || !isSessionSettled(session, goalTurnScheduled))
+					return error(id, command.type, "Wait for the agent to finish", "session_busy");
+				setSessionPromptSections(command.sections.map(text => ({ title: "", text, enabled: true })));
+				return success(id, command.type);
+			}
 			case "get_state": {
 				// A goal exit triggered by the last turn restores tools asynchronously; report after it.
 				await goalController.settled();

@@ -1662,6 +1662,14 @@ export interface OpenSessionParams {
 	modelId?: string;
 }
 
+export interface SetPromptSectionsParams {
+	sections: string[];
+}
+
+export interface SetMcpOverridesParams {
+	overrides: Record<string, boolean>;
+}
+
 export interface SetFastModeParams {
 	enabled: boolean;
 }
@@ -2000,6 +2008,8 @@ export interface RpcWireCommands {
 	new_session: { params: NewSessionParams; result: CancellationResult };
 	open_session: { params: OpenSessionParams; result: OpenSessionResult };
 	get_state: { params: undefined; result: SessionState };
+	set_prompt_sections: { params: SetPromptSectionsParams; result: undefined };
+	set_mcp_overrides: { params: SetMcpOverridesParams; result: undefined };
 	set_fast_mode: { params: SetFastModeParams; result: FastModeResult };
 	set_slow_mode: { params: SetSlowModeParams; result: SetSlowModeResult };
 	goal: { params: GoalParams; result: GoalResult };

@@ -64,6 +64,8 @@ export type RpcCommand =
 
 	// State
 	| { id?: string; type: "get_state" }
+	| { id?: string; type: "set_mcp_overrides"; overrides: Record<string, boolean> }
+	| { id?: string; type: "set_prompt_sections"; sections: string[] }
 	| { id?: string; type: "set_fast_mode"; enabled: boolean }
 	| { id?: string; type: "set_slow_mode"; enabled: boolean }
 	| {
@@ -466,6 +468,8 @@ export type RpcResponse =
 
 	// State
 	| { id?: string; type: "response"; command: "get_state"; success: true; data: RpcSessionState }
+	| { id?: string; type: "response"; command: "set_mcp_overrides"; success: true }
+	| { id?: string; type: "response"; command: "set_prompt_sections"; success: true }
 	| {
 			id?: string;
 			type: "response";

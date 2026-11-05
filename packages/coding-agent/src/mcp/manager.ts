@@ -42,6 +42,7 @@ import {
 import type { MCPStoredOAuthCredential } from "./oauth-flow";
 import type { McpConnectionStatusEvent } from "./startup-events";
 import { resolveMCPStartupTimeoutMs } from "./timeout";
+import { getMcpSessionOverrides, parseMcpSessionOverrides, setMcpSessionOverrides } from "./session-overrides";
 
 import type { MCPToolDetails } from "@oh-my-pi/pi-tui/tools/mcp";
 import { DeferredMCPTool, MCPTool, type MCPToolCallObserver } from "./tool-bridge";
@@ -828,6 +829,43 @@ export class MCPManager implements MCPManagerApi {
 	 */
 	reconcileProjectConfig(enabled: boolean): Promise<void> {
 		const reconcile = this.#browserFilterMutationTail.then(() => this.#applyProjectConfig(enabled));
+		this.#browserFilterMutationTail = reconcile.catch(() => undefined);
+		return reconcile;
+	}
+
+	/** Change only this process's server switches, preserving unaffected connections. */
+	reconcileSessionOverrides(overrides: Record<string, boolean>): Promise<void> {
+		const next = parseMcpSessionOverrides(overrides);
+		const reconcile = this.#browserFilterMutationTail.then(async () => {
+			await this.#discoveryInFlight;
+			const previous = getMcpSessionOverrides();
+			const affected = new Set(
+				[...Object.keys(previous), ...Object.keys(next)].filter(name => previous[name] !== next[name]),
+			);
+			if (affected.size === 0) return;
+			setMcpSessionOverrides(next);
+			let loaded: LoadMCPConfigsResult;
+			try {
+				loaded = await this.loadConfigs(this.cwd, this.#discoverOptions);
+			} catch (error) {
+				setMcpSessionOverrides(previous);
+				throw error;
+			}
+			// Include aliases that appeared/disappeared through discovery deduplication.
+			for (const name of this.getAllServerNames()) if (!loaded.configs[name]) affected.add(name);
+			for (const name of Object.keys(loaded.configs)) if (!this.#serverConfigs.has(name)) affected.add(name);
+			await Promise.all([...affected].map(name => this.disconnectServer(name)));
+			const configs: Record<string, MCPServerConfig> = {};
+			for (const name of [...affected].sort()) {
+				if (loaded.configs[name]) configs[name] = loaded.configs[name];
+			}
+			await this.connectServers(
+				configs,
+				loaded.sources,
+				this.#discoverOptions?.onStatus,
+				this.#discoverOptions?.startupTimeoutMs,
+			);
+		});
 		this.#browserFilterMutationTail = reconcile.catch(() => undefined);
 		return reconcile;
 	}

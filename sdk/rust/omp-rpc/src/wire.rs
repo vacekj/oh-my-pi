@@ -5445,6 +5445,16 @@ pub struct OpenSessionParams {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetPromptSectionsParams {
+	pub sections: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetMcpOverridesParams {
+	pub overrides: BTreeMap<String, bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetFastModeParams {
 	pub enabled: bool,
 }
@@ -6597,6 +6607,40 @@ impl Command for GetStateCommand {
 
 	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
 		serde_json::from_value::<SessionState>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
+/// Set additional system prompt sections for subsequent turns.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetPromptSectionsCommand {
+	pub sections: Vec<String>,
+}
+
+impl Command for SetPromptSectionsCommand {
+	const NAME: &'static str = "set_prompt_sections";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = ();
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		let _ = data;
+		Ok(())
+	}
+}
+
+/// Set process-local MCP switches without changing shared configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetMcpOverridesCommand {
+	pub overrides: BTreeMap<String, bool>,
+}
+
+impl Command for SetMcpOverridesCommand {
+	const NAME: &'static str = "set_mcp_overrides";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = ();
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		let _ = data;
+		Ok(())
 	}
 }
 

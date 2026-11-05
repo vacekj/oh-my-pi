@@ -8156,6 +8156,26 @@ func (c Commands) GetState(ctx context.Context) (SessionState, error) {
 	return out, err
 }
 
+// SetPromptSectionsCommand holds the parameters of "set_prompt_sections".
+type SetPromptSectionsCommand struct {
+	Sections []string `json:"sections"`
+}
+
+// SetPromptSections sends "set_prompt_sections": Set additional system prompt sections for subsequent turns.
+func (c Commands) SetPromptSections(ctx context.Context, p SetPromptSectionsCommand) error {
+	return c.call(ctx, "set_prompt_sections", p, 0, nil)
+}
+
+// SetMcpOverridesCommand holds the parameters of "set_mcp_overrides".
+type SetMcpOverridesCommand struct {
+	Overrides map[string]bool `json:"overrides"`
+}
+
+// SetMcpOverrides sends "set_mcp_overrides": Set process-local MCP switches without changing shared configuration.
+func (c Commands) SetMcpOverrides(ctx context.Context, p SetMcpOverridesCommand) error {
+	return c.call(ctx, "set_mcp_overrides", p, 0, nil)
+}
+
 // SetFastModeCommand holds the parameters of "set_fast_mode".
 type SetFastModeCommand struct {
 	Enabled bool `json:"enabled"`

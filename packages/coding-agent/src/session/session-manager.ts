@@ -1165,6 +1165,11 @@ export class SessionManager {
 		// another session was moved onto it, the claim fails and the next write
 		// moves this session to a sibling instead of appending into that journal.
 		this.#sessionClaim = { sessionId, release: this.#storage.claimSession(sessionId, sessionFile) ?? undefined };
+		if (!this.#sessionClaim.release && process.env.OMP_STRICT_SESSION_LOCK === "1") {
+			throw new Error(
+				"Session is locked by another process. Open it read-only or wait for that process to release it.",
+			);
+		}
 	}
 
 	/**
@@ -4472,6 +4477,7 @@ export class SessionManager {
 			throwIfMissing: options?.throwIfMissing,
 			newSession: { parentSession: options?.parentSession },
 		});
+		if (process.env.OMP_STRICT_SESSION_LOCK === "1") manager.#claimSession();
 		return manager;
 	}
 

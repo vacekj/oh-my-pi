@@ -142,6 +142,28 @@
 				"clientOmit": []
 			},
 			{
+				"name": "set_prompt_sections",
+				"doc": "Set additional system prompt sections for subsequent turns.",
+				"params": "SetPromptSectionsParams",
+				"result": null,
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "set_mcp_overrides",
+				"doc": "Set process-local MCP switches without changing shared configuration.",
+				"params": "SetMcpOverridesParams",
+				"result": null,
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
 				"name": "set_fast_mode",
 				"doc": "Enable or disable fast mode for the session.",
 				"params": "SetFastModeParams",
@@ -6493,6 +6515,35 @@
 			},
 			"required": [
 				"sessionDir"
+			]
+		},
+		"SetPromptSectionsParams": {
+			"type": "object",
+			"properties": {
+				"sections": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				}
+			},
+			"required": [
+				"sections"
+			]
+		},
+		"SetMcpOverridesParams": {
+			"type": "object",
+			"properties": {
+				"overrides": {
+					"type": "object",
+					"properties": {},
+					"additionalProperties": {
+						"type": "boolean"
+					}
+				}
+			},
+			"required": [
+				"overrides"
 			]
 		},
 		"SetFastModeParams": {
