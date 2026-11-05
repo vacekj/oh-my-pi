@@ -1596,6 +1596,49 @@ describe("per-call model preflight", () => {
 		);
 	}
 
+	it.each(["task", "eval"] as const)(
+		"lets an explicit %s model override every configured default",
+		async invocationKind => {
+			mockDiscovery({ ...AGENT, model: ["mock/frontmatter"] });
+			const settings = {
+				"task.perCallModel": "on",
+				"task.modelAccess": "available",
+				"task.defaultModel": "mock/global",
+				"task.agentModelOverrides": { worker: "mock/agent-default" },
+			};
+			const caller = perCallSession(settings);
+			const selected = await resolveEffectiveSubagentPolicy(
+				request({ session: caller, invocationKind, perCallModel: "mock/target:max" }),
+			);
+			expect(selected.modelOverride).toEqual(["mock/target:max"]);
+			const omitted = await resolveEffectiveSubagentPolicy(request({ session: caller, invocationKind }));
+			expect(omitted.modelOverride).toEqual(["mock/agent-default"]);
+		},
+	);
+
+	it("uses the global default for general-purpose agents without replacing specialist defaults", async () => {
+		const caller = perCallSession({ "task.defaultModel": "mock/global:max" });
+		mockDiscovery({ ...AGENT, model: ["@task"] });
+		expect((await resolveEffectiveSubagentPolicy(request({ session: caller }))).modelOverride).toEqual([
+			"mock/global:max",
+		]);
+		mockDiscovery({ ...AGENT, model: ["mock/specialist"] });
+		expect((await resolveEffectiveSubagentPolicy(request({ session: caller }))).modelOverride).toEqual([
+			"mock/specialist",
+		]);
+	});
+
+	it("refuses a spawn hook that substitutes an explicit model before starting a worker", async () => {
+		mockDiscovery();
+		const caller = perCallSession({ "task.perCallModel": "on", "task.modelAccess": "available" });
+		caller.emitBeforeSubagentSpawn = async () => ({ model: "mock/another:max" });
+		const dispatch = vi.spyOn(executorModule, "runSubprocess");
+		await expect(
+			runStructuredSubagent(request({ session: caller, perCallModel: "mock/target:max" })),
+		).rejects.toThrow("cannot replace an explicitly selected");
+		expect(dispatch).not.toHaveBeenCalled();
+	});
+
 	// `off` refuses every kind and `eval` refuses task calls. The selector is invalid on purpose:
 	// the disabled gate is reported first, so a caller is never told to fix a selector it may not send.
 	it.each([
@@ -1669,13 +1712,6 @@ describe("per-call model preflight", () => {
 		["a non-chat model", "mock/painter", {}, false, /image model; a subagent needs a chat model/],
 		["a non-chat model while discovery is running", "mock/painter", {}, true, /image model/],
 		["an unapproved model", "mock/target", { modelRoles: {} }, false, /not approved/],
-		[
-			"a model for an agent with an override",
-			"mock/target",
-			{ "task.agentModelOverrides": { worker: "mock/target" } },
-			false,
-			/conflicts with task\.agentModelOverrides/,
-		],
 	] as const)("rejects %s", async (_name, perCallModel, settings, refreshPending, error) => {
 		mockDiscovery();
 		await expect(

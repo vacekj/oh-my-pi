@@ -133,6 +133,11 @@
 ### Fixed
 
 - Browser: a headless Chrome launched in-process by an SDK embedding or a `bun test` run now exits when that process is killed, instead of running on with its temporary profile on Linux and macOS ([#17908](https://github.com/can1357/oh-my-pi/pull/17908) by [@will-bogusz](https://github.com/will-bogusz))
+- Agents can discover live subagent models, reasoning levels, defaults, prices and selection restrictions with the `models` tool; operator opt-in `task.modelAccess: available` permits any available chat model, with `task.defaultModel` for general-purpose defaults.
+
+### Changed
+
+- Explicit subagent model selections override configured agent defaults, remain exact through spawn hooks and revival, and fail rather than silently substitute another model.
 
 ## [18.16.0] - 2026-11-02
 
