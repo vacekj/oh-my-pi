@@ -31,6 +31,10 @@
 - The idle recap no longer disappears when the session is resumed, restarted or its transcript is rebuilt; the latest recap stays at the end until the conversation moves on ([#18113](https://github.com/can1357/oh-my-pi/pull/18113) by [@materemias](https://github.com/materemias))
 - Fixed a chat session that ends up on the model assigned to the `web` (or another model-kind) role adopting that role's retry fallback chain and cycling `web/*` search providers as chat models, each failing with `Unhandled API in mapOptionsForApi: web-search` ([#18056](https://github.com/can1357/oh-my-pi/pull/18056) by [@haesol-shin](https://github.com/haesol-shin))
 
+### Removed
+
+- Removed Auto-QA tool issue reporting: the `xd://report_issue` device and its system-prompt instruction, the consent popup, the `omp grievances` command, the `dev.autoqa`, `dev.autoqaConsent` and `dev.autoqaPush.*` settings, and the `PI_AUTO_QA*` environment variables. Saved `dev.*` keys are dropped from config.yml; an existing `autoqa.db` is no longer read or pushed
+
 ### Changed
 
 - Local Whisper speech-to-text and the local tiny model install their Transformers.js runtime on first use instead of with omp, so installs are smaller; first use needs network access
