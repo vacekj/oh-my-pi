@@ -23,7 +23,9 @@ from ._wire import (
     ExtensionUiRequest,
     ImageContent,
     MessageEndEvent,
+    PromptFilter,
     PromptResultEvent,
+    PromptSectionInput,
     ReadyEvent,
     RpcAgentEvent,
     RpcNotification,
@@ -972,6 +974,21 @@ class RpcClient(WireClient):
 
     def clear_todos(self) -> tuple[TodoPhase, ...]:
         return self.set_todos(())
+
+    def set_prompt_sections(self, sections: Sequence[str | PromptSectionInput]) -> None:
+        wire: list[object] = [
+            section
+            if isinstance(section, str)
+            else {"title": section.title, "text": section.text}
+            for section in sections
+        ]
+        self._command("set_prompt_sections", {"sections": wire})
+
+    def set_prompt_filter(self, filter: PromptFilter) -> None:
+        self._command(
+            "set_prompt_filter",
+            {"filter": {"mode": filter.mode, "ids": list(filter.ids)}},
+        )
 
     def get_messages(self) -> tuple[AgentMessage, ...]:
         if self._protocol_version == 2:

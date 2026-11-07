@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- RPC `get_state` reports the system prompt as a tree of sections (`systemPromptSources.sections`): every template section is declared in its template with `{{#section}}` (id, title, template file and line range, enclosing conditionals), inputs keep their source, and session sections and the memory recall are listed too. Every block of the prompt is tiled by top-level sections.
+- RPC `set_prompt_filter` and `OMP_SESSION_PROMPT_FILTER` keep or remove sections of the system prompt per session (`exclude` ids, or `only` ids; `only` with no ids gives an empty prompt, `only: ["tools"]` just the tool list). The prompt is rebuilt at once; tool schemas are unaffected.
+- RPC `set_prompt_sections` and `OMP_SESSION_PROMPT_SECTIONS` accept `{ title, text }` sections, reported as `session-section:<n>` under that title.
+- Template text outside every `{{#section}}` of a custom system prompt template is reported as `template:text`, `template:text/2`, … sections (the n-th stretch between sections keeps its id whatever the filter removes), and obeys `set_prompt_filter` like any other section. `systemPromptSources.excluded` also lists the session sections and the memory recall the filter removed.
+
 ### Fixed
 
 - Python-defined async tools now reuse their defining kernel's event loop, and cancelling a tool waits for its cleanup instead of leaving it running.

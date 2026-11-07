@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Template block helpers receive `loc` (the source lines of their opening and closing tags) and `enclosing` (the conditional blocks they render inside, with the branch taken), so a helper can report where it was declared and what had to hold for it to render.
+
 ### Fixed
 
 - `ptree` commands spawned with `subreaper: true` no longer leave a descendant that ignores SIGTERM running after a graceful stop (an `AbortSignal`, `kill()` without a hard grace, or dispose); the subreaper stays alive through the grace period and the hard sweep then ends every descendant ([#18018](https://github.com/can1357/oh-my-pi/pull/18018) by [@sjawhar](https://github.com/sjawhar))

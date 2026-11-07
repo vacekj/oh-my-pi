@@ -40,10 +40,20 @@ import systemPromptTemplate from "./prompts/system/system-prompt.md" with { type
 import userAppendPromptTemplate from "./prompts/system/user-append.md" with { type: "text" };
 import {
 	type AppendPromptPart,
+	droppedRoots,
 	type LocateResult,
+	type LocatedTemplate,
 	locateSources,
+	markedSections,
+	NO_PROMPT_FILTER,
+	type PromptFilter,
+	type PromptSectionRef,
+	promptFilterDrops,
+	renderTemplate,
+	SECTION_MARKER_KEY,
 	SourceMarker,
 	type SystemPromptManifest,
+	wholeBlockSection,
 } from "./system-prompt-sources";
 import { normalizeConcurrencyLimit } from "./task/parallel";
 import type { ActiveRepoContext } from "@oh-my-pi/pi-tui/status-line/host";
@@ -555,6 +565,12 @@ export interface BuildSystemPromptOptions {
 	appendSystemPromptPath?: string;
 	/** Setting id each option was read from (`{ personality: "personality" }`), for the source manifest. */
 	optionSettings?: Partial<Record<keyof BuildSystemPromptOptions, string>>;
+	/**
+	 * Sections to leave out of the prompt (`exclude`), or the only ones to keep
+	 * (`only`; the sections around a kept one render their own text). Inputs a
+	 * filter removes are dropped from the template data. Default: keep everything.
+	 */
+	promptFilter?: PromptFilter;
 	/** Inline full tool descriptors in the system prompt. Default: false */
 	inlineToolDescriptors?: boolean;
 	/**
@@ -665,6 +681,10 @@ export interface BuildSystemPromptResult {
 	/** Which input produced which text of `systemPrompt`. Absent when NULL_PROMPT empties the prompt. */
 	manifest?: SystemPromptManifest;
 }
+
+const SYSTEM_PROMPT_TEMPLATE_FILE = "src/prompts/system/system-prompt.md";
+const CUSTOM_PROMPT_TEMPLATE_FILE = "src/prompts/system/custom-system-prompt.md";
+const PROJECT_PROMPT_TEMPLATE_FILE = "src/prompts/system/project-prompt.md";
 
 /** Static wrapper; compiled (not rendered) so user-authored Markdown passes through byte-for-byte. */
 const renderUserAppend = prompt.compile(userAppendPromptTemplate.trimEnd());
@@ -1056,19 +1076,20 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	// The template data, with each input value passed through `mark`: the plain
 	// marker yields the prompt itself, the tracking one the source manifest.
 	const templateData = (mark: SourceMarker) => {
+		const kept = (id: string) => !mark.dropped(id);
 		const userAppend = mark.wrap(
 			{ id: "user-append", kind: "user-append", label: "Appended system prompt", path: appendPromptPath },
 			resolvedAppendPrompt,
 		);
 		const markedAppend = appendPromptParts
 			? composeAppendPrompt(
-					appendPromptParts.map(({ text, ...info }) => mark.wrap(info, text)),
+					appendPromptParts.filter(part => kept(part.id)).map(({ text, ...info }) => mark.wrap(info, text)),
 					userAppend,
 				)
 			: userAppend;
 		const lastEnvironment = environment.length - 1;
 		const [workstationOpen, workstationClose] =
-			environment.length > 0
+			environment.length > 0 && kept("workstation")
 				? mark.around({ id: "workstation", kind: "workstation", label: "Workstation" })
 				: ["", ""];
 		return {
@@ -1093,16 +1114,18 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 			),
 			appendPrompt: markedAppend ?? "",
 			tools: [...new Set([...toolNames, ...xdevTools.map(mounted => mounted.name)])],
-			toolInfo: toolInfo.map(tool => {
-				const [open, close] = mark.around({
-					id: `tool:${tool.internalName}`,
-					kind: "tool",
-					label: tool.internalName,
-				});
-				return tool.label
-					? { ...tool, label: open + tool.label, name: tool.name + close }
-					: { ...tool, name: open + tool.name + close };
-			}),
+			toolInfo: toolInfo
+				.filter(tool => kept(`tool:${tool.internalName}`))
+				.map(tool => {
+					const [open, close] = mark.around({
+						id: `tool:${tool.internalName}`,
+						kind: "tool",
+						label: tool.internalName,
+					});
+					return tool.label
+						? { ...tool, label: open + tool.label, name: tool.name + close }
+						: { ...tool, name: open + tool.name + close };
+				}),
 			toolInventory: mark.wrap(
 				{ id: "tool-inventory", kind: "tool-inventory", label: "Tool catalog" },
 				toolInventory,
@@ -1110,29 +1133,33 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 			inlineToolDescriptors,
 			toolListMode,
 			toolRefs,
-			environment: environment.map((entry, index) => ({
+			environment: (kept("workstation") ? environment : []).map((entry, index) => ({
 				label: index === 0 ? workstationOpen + entry.label : entry.label,
 				value: index === lastEnvironment ? entry.value + workstationClose : entry.value,
 			})),
-			contextFiles: contextFiles.map(file => ({
-				...file,
-				content: mark.wrap(
-					{
-						id: `context-file:${file.path}`,
-						kind: "context-file",
-						label: path.basename(file.path),
-						path: file.path,
-						level: file.level,
-						depth: file.depth,
-						provider: file.provider,
-					},
-					file.content,
-				),
-			})),
+			contextFiles: contextFiles
+				.filter(file => kept(`context-file:${file.path}`))
+				.map(file => ({
+					...file,
+					content: mark.wrap(
+						{
+							id: `context-file:${file.path}`,
+							kind: "context-file",
+							label: path.basename(file.path),
+							path: file.path,
+							level: file.level,
+							depth: file.depth,
+							provider: file.provider,
+						},
+						file.content,
+					),
+				})),
 			agentsMdSearch: {
-				files: agentsMdFiles.map(file =>
-					mark.wrap({ id: `nested-context:${file}`, kind: "nested-context", label: file, path: file }, file),
-				),
+				files: agentsMdFiles
+					.filter(file => kept(`nested-context:${file}`))
+					.map(file =>
+						mark.wrap({ id: `nested-context:${file}`, kind: "nested-context", label: file, path: file }, file),
+					),
 			},
 			workspaceTree: {
 				...workspaceTree,
@@ -1147,43 +1174,58 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 				),
 			},
 			hasSkillUriAccess,
-			internalUrls: internalUrls.map(entry =>
-				mark.wrap(
-					{ id: `internal-url:${entry.scheme}`, kind: "internal-url", label: `${entry.scheme}://` },
-					entry.line,
+			internalUrls: internalUrls
+				.filter(entry => kept(`internal-url:${entry.scheme}`))
+				.map(entry =>
+					mark.wrap(
+						{ id: `internal-url:${entry.scheme}`, kind: "internal-url", label: `${entry.scheme}://` },
+						entry.line,
+					),
 				),
-			),
-			skills: filteredSkills.map(skill => {
-				const [open, close] = mark.around({
-					id: `skill:${skill.name}`,
-					kind: "skill",
-					label: skill.name,
-					path: skill.filePath,
-					level: skill._source?.level,
-					provider: skill._source?.providerName,
-				});
-				return { ...skill, name: open + skill.name, description: skill.description + close };
-			}),
-			rules: (rules ?? []).map(rule => {
-				const [open, close] = mark.around({
-					id: `rule:${rule.name}`,
-					kind: "rule",
-					label: rule.name,
-					path: rule.path,
-				});
-				return { ...rule, name: open + rule.name, description: (rule.description ?? "") + close };
-			}),
-			alwaysApplyRules: injectedAlwaysApplyRules.map(rule => ({
-				...rule,
-				content: mark.wrap(
-					{ id: `always-apply-rule:${rule.name}`, kind: "always-apply-rule", label: rule.name, path: rule.path },
-					rule.content,
-				),
-			})),
+			skills: filteredSkills
+				.filter(skill => kept(`skill:${skill.name}`))
+				.map(skill => {
+					const [open, close] = mark.around({
+						id: `skill:${skill.name}`,
+						kind: "skill",
+						label: skill.name,
+						path: skill.filePath,
+						level: skill._source?.level,
+						provider: skill._source?.providerName,
+					});
+					return { ...skill, name: open + skill.name, description: skill.description + close };
+				}),
+			rules: (rules ?? [])
+				.filter(rule => kept(`rule:${rule.name}`))
+				.map(rule => {
+					const [open, close] = mark.around({
+						id: `rule:${rule.name}`,
+						kind: "rule",
+						label: rule.name,
+						path: rule.path,
+					});
+					return { ...rule, name: open + rule.name, description: (rule.description ?? "") + close };
+				}),
+			alwaysApplyRules: injectedAlwaysApplyRules
+				.filter(rule => kept(`always-apply-rule:${rule.name}`))
+				.map(rule => ({
+					...rule,
+					content: mark.wrap(
+						{
+							id: `always-apply-rule:${rule.name}`,
+							kind: "always-apply-rule",
+							label: rule.name,
+							path: rule.path,
+						},
+						rule.content,
+					),
+				})),
 			cwd: promptCwd,
-			additionalWorkspaceRoots: workspaceRoots.map(root =>
-				mark.wrap({ id: `workspace-root:${root}`, kind: "workspace-root", label: root, path: root }, root),
-			),
+			additionalWorkspaceRoots: workspaceRoots
+				.filter(root => kept(`workspace-root:${root}`))
+				.map(root =>
+					mark.wrap({ id: `workspace-root:${root}`, kind: "workspace-root", label: root, path: root }, root),
+				),
 			model: includeModelInPrompt
 				? mark.wrap(
 						{ id: "model", kind: "model", label: "Model", setting: optionSettings.includeModelInPrompt },
@@ -1234,70 +1276,128 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 				{ id: "repo-context", kind: "repo-context", label: "Active repository" },
 				activeRepoContextPrompt,
 			),
+			[SECTION_MARKER_KEY]: mark,
 		};
 	};
-	const data = templateData(SourceMarker.plain());
+	const filter = options.promptFilter ?? NO_PROMPT_FILTER;
+	const gateSettings: Record<string, string> = { ...optionSettings };
+	if (optionSettings.intentField) gateSettings.intentTracing = optionSettings.intentField;
 	let selectedTemplate = resolvedCustomPrompt
 		? customSystemPromptTemplate
 		: (resolvedSystemPromptTemplate ?? systemPromptTemplate);
-	let rendered: string;
-	try {
-		rendered = prompt.render(selectedTemplate, data);
-	} catch (error) {
-		if (resolvedSystemPromptTemplate === undefined) throw error;
-		if (!hasDiscoveredTemplate) {
-			throw new Error(`Invalid system prompt template: ${String(error)}`, { cause: error });
+	const templateFile = (): string =>
+		resolvedCustomPrompt
+			? CUSTOM_PROMPT_TEMPLATE_FILE
+			: resolvedSystemPromptTemplate !== undefined
+				? (templatePath ?? "(inline template)")
+				: SYSTEM_PROMPT_TEMPLATE_FILE;
+	const lineCount = (template: string): number => template.replace(/\n$/, "").split("\n").length;
+	const templateBlock = (): LocatedTemplate => ({
+		file: templateFile(),
+		lines: lineCount(selectedTemplate),
+		textId: "template:text",
+	});
+	// One render of block 0's template, falling back to the bundled prompt when a
+	// discovered template does not render. `tracking` renders with markers and
+	// without the post-render format.
+	const renderTemplateBlock = (marker: SourceMarker, data: ReturnType<typeof templateData>, tracking: boolean) => {
+		const run = (): string =>
+			renderTemplate(marker, selectedTemplate, data, tracking, templateBlock(), {
+				id: "template:root",
+				title: "System prompt template",
+			});
+		try {
+			return run();
+		} catch (error) {
+			if (resolvedSystemPromptTemplate === undefined) throw error;
+			if (!hasDiscoveredTemplate) {
+				throw new Error(`Invalid system prompt template: ${String(error)}`, { cause: error });
+			}
+			logger.warn("Ignoring invalid discovered system prompt template; using the bundled prompt", {
+				error: String(error),
+			});
+			resolvedSystemPromptTemplate = undefined;
+			templatePath = undefined;
+			selectedTemplate = systemPromptTemplate;
+			return run();
 		}
-		logger.warn("Ignoring invalid discovered system prompt template; using the bundled prompt", {
-			error: String(error),
-		});
-		resolvedSystemPromptTemplate = undefined;
-		templatePath = undefined;
-		selectedTemplate = systemPromptTemplate;
-		rendered = prompt.render(systemPromptTemplate, data);
-	}
-	const systemPrompt = [rendered];
-	const preludeBlocks: Array<{ block: number; name: string }> = [];
-	for (const prelude of evalPreludes) {
+	};
+	const projectBlock = (): LocatedTemplate => ({
+		file: PROJECT_PROMPT_TEMPLATE_FILE,
+		lines: lineCount(projectPromptTemplate),
+		textId: "template:project/text",
+	});
+	const renderProjectBlock = (marker: SourceMarker, data: ReturnType<typeof templateData>, tracking: boolean) =>
+		renderTemplate(marker, projectPromptTemplate, data, tracking, projectBlock());
+	const preludeGuidance = evalPreludes.flatMap(prelude => {
 		const guidance = prelude.guidance?.trim();
-		if (!guidance) continue;
-		preludeBlocks.push({ block: systemPrompt.length, name: prelude.name });
-		systemPrompt.push(guidance);
+		return guidance ? [{ name: prelude.name, guidance }] : [];
+	});
+
+	// A filter is resolved against the sections an unfiltered build renders.
+	const filtered = filter.mode === "only" || filter.ids.length > 0;
+	let dropped: (id: string) => boolean = () => false;
+	let excluded: PromptSectionRef[] = [];
+	if (filtered) {
+		const unfiltered = SourceMarker.tracking({ gateSettings });
+		const unfilteredData = templateData(unfiltered);
+		const tree = [
+			...markedSections(renderTemplateBlock(unfiltered, unfilteredData, true), unfiltered, templateBlock()),
+			...preludeGuidance.map(({ name }): PromptSectionRef => ({
+				id: `eval-prelude:${name}`,
+				parent: null,
+				title: name,
+				kind: "eval-prelude",
+				origin: null,
+			})),
+			...markedSections(renderProjectBlock(unfiltered, unfilteredData, true), unfiltered, projectBlock()),
+		];
+		dropped = promptFilterDrops(filter, tree);
+		excluded = droppedRoots(tree, dropped);
+	}
+
+	const plain = SourceMarker.plain({ ...(filtered ? { dropped } : {}), gateSettings });
+	const data = templateData(plain);
+	const rendered = renderTemplateBlock(plain, data, false);
+	const builtBlocks: Array<{ text: string; kind: "template" | "prelude" | "project"; name?: string }> = [];
+	// An unfiltered prompt always has its template block; a filter may remove all of it.
+	if (rendered.trim() || !filtered) builtBlocks.push({ text: rendered, kind: "template" });
+	for (const { name, guidance } of preludeGuidance) {
+		if (!dropped(`eval-prelude:${name}`)) builtBlocks.push({ text: guidance, kind: "prelude", name });
 	}
 	// Working-directory content (context files with their paths, workspace
 	// tree/roots, active repo) and session append text form one trailing
 	// `<project-context>` block after every static block, so sessions in
 	// different directories share the static prefix and the Anthropic head
 	// cache breakpoint lands right before this block.
-	const projectPrompt = prompt.render(projectPromptTemplate, data).trim();
-	if (projectPrompt) {
-		systemPrompt.push(projectPrompt);
-	}
+	const projectPrompt = renderProjectBlock(plain, data, false).trim();
+	if (projectPrompt) builtBlocks.push({ text: projectPrompt, kind: "project" });
+	const systemPrompt = builtBlocks.map(block => block.text);
 
 	let manifest: SystemPromptManifest | undefined;
 	try {
-		const tracker = SourceMarker.tracking();
+		const tracker = SourceMarker.tracking({ ...(filtered ? { dropped } : {}), gateSettings });
 		const marked = templateData(tracker);
-		const located: LocateResult = { sources: [], unlocated: [] };
-		locateSources(0, prompt.compile(selectedTemplate)(marked), rendered, tracker.entries, located);
-		for (const { block, name } of preludeBlocks) {
-			located.sources.push({
-				id: `eval-prelude:${name}`,
-				kind: "eval-prelude",
-				label: name,
-				block,
-				start: 0,
-				end: systemPrompt[block].length,
-			});
-		}
-		if (projectPrompt) {
-			locateSources(
-				systemPrompt.length - 1,
-				prompt.compile(projectPromptTemplate)(marked),
-				projectPrompt,
-				tracker.entries,
-				located,
-			);
+		const located: LocateResult = { sources: [], unlocated: [], sections: [] };
+		for (const [block, { text, kind, name }] of builtBlocks.entries()) {
+			if (kind === "prelude") {
+				const info = { id: `eval-prelude:${name}`, kind: "eval-prelude" as const, label: name ?? "" };
+				const section = wholeBlockSection(block, text, {
+					id: info.id,
+					title: info.label,
+					kind: info.kind,
+					source: info,
+				});
+				if (section) {
+					located.sources.push({ ...info, block, start: section.start, end: section.end });
+					located.sections.push(section);
+				}
+			} else if (kind === "template") {
+				const markedTemplate = renderTemplateBlock(tracker, marked, true);
+				locateSources(block, markedTemplate, text, tracker, located, templateBlock());
+			} else {
+				locateSources(block, renderProjectBlock(tracker, marked, true), text, tracker, located, projectBlock());
+			}
 		}
 		const gateValues: Array<[keyof BuildSystemPromptOptions, string | number | boolean | undefined]> = [
 			["personality", personality],
@@ -1337,6 +1437,9 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 			),
 			sources: located.sources,
 			unlocated: located.unlocated,
+			sections: located.sections,
+			filter,
+			excluded,
 		};
 	} catch (error) {
 		// The manifest only describes the prompt; never fail a build over it.
@@ -1347,7 +1450,11 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	// section, so a template that references {{xdevDocs}} keeps mount-notice
 	// dedupe while one that omits it stays honest.
 	const xdevCatalogNames =
-		!resolvedCustomPrompt && xdevTools.length > 0 && rendered.includes("xd://")
+		!resolvedCustomPrompt &&
+		xdevTools.length > 0 &&
+		!dropped("template:tool-devices") &&
+		!dropped("xdev-docs") &&
+		rendered.includes("xd://")
 			? xdevTools.map(mounted => mounted.name)
 			: undefined;
 	return { systemPrompt, xdevCatalogNames, manifest };

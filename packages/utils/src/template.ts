@@ -21,6 +21,29 @@ export interface HelperOptions {
 	fn: (context?: unknown, options?: { data?: Record<string, unknown> }) => string;
 	inverse: (context?: unknown, options?: { data?: Record<string, unknown> }) => string;
 	lookupProperty: (parent: unknown, propertyName: string) => unknown;
+	/** 1-based template source lines of a block's opening and closing tags. Absent outside block calls. */
+	loc?: { startLine: number; endLine: number };
+	/**
+	 * The conditional blocks (`if`, `unless`, `has`, `when`, `ifAny`, `ifAll`) around this
+	 * call that are being rendered, outermost first, each with the branch taken.
+	 */
+	readonly enclosing: readonly EnclosingBlock[];
+}
+
+/** A conditional block the template is rendering inside of. */
+export interface EnclosingBlock {
+	/** Block helper name (`if`, `has`, …). */
+	helper: string;
+	/** The branch being rendered: the block body or its `{{else}}` part. */
+	branch: "body" | "inverse";
+	args: ReadonlyArray<{
+		/** The argument as the template spells it (`skills.length`, `"think"`). */
+		text: string;
+		/** What it evaluated to. */
+		value: unknown;
+		/** Context names a path in the argument starts from (`skills` for `skills.length`). */
+		roots: string[];
+	}>;
 }
 
 /** A template helper function. */
@@ -57,15 +80,32 @@ type CallExpression = { kind: "call"; name: string; args: Expression[]; hash: Re
 type Expression = PathExpression | LiteralExpression | CallExpression;
 type TextNode = { kind: "text"; value: string };
 type OutputNode = { kind: "output"; expression: CallExpression; escaped: boolean };
-type BlockNode = { kind: "block"; expression: CallExpression; body: Node[]; inverse: Node[]; inverted: boolean };
+type BlockLoc = { startLine: number; endLine: number };
+type BlockNode = {
+	kind: "block";
+	expression: CallExpression;
+	body: Node[];
+	inverse: Node[];
+	inverted: boolean;
+	loc: BlockLoc;
+};
 type PartialNode = { kind: "partial"; expression: CallExpression };
 type Node = TextNode | OutputNode | BlockNode | PartialNode;
+
+/** Conditional blocks being rendered, innermost first. */
+type Enclosing = {
+	parent: Enclosing | undefined;
+	call: CallExpression;
+	values: unknown[];
+	branch: "body" | "inverse";
+};
 
 type Frame = {
 	context: unknown;
 	parents: Frame[];
 	root: unknown;
 	data: Record<string, unknown>;
+	enclosing: Enclosing | undefined;
 };
 
 type Evaluation = {
@@ -79,7 +119,11 @@ const helpers = new Map<string, HelperDelegate>();
 const partials = new Map<string, Template>();
 const BLOCK_TAG = /^\s*\{\{(?:#|\/|\^|else\b|!)/;
 
-function stripStandalone(source: string): string {
+/**
+ * Removes the lines a block tag or comment occupies alone. `lineAt` maps an
+ * offset of the returned text back to its 1-based line in `source`.
+ */
+function stripStandalone(source: string): { text: string; lineAt: (offset: number) => number } {
 	const lines = source.split(/(?<=\n)/);
 	for (let index = 0; index < lines.length; index++) {
 		const line = lines[index];
@@ -101,7 +145,24 @@ function stripStandalone(source: string): string {
 			lines[index] = body.trim();
 		}
 	}
-	return lines.join("");
+	const starts: number[] = [];
+	let length = 0;
+	for (const line of lines) {
+		starts.push(length);
+		length += line.length;
+	}
+	const lineAt = (offset: number): number => {
+		// Last line starting at or before `offset`; empty lines share the start of the next one.
+		let low = 0;
+		let high = starts.length - 1;
+		while (low < high) {
+			const mid = (low + high + 1) >> 1;
+			if (starts[mid] <= offset) low = mid;
+			else high = mid - 1;
+		}
+		return low + 1;
+	};
+	return { text: lines.join(""), lineAt };
 }
 
 function tokenizeExpression(source: string): string[] {
@@ -224,7 +285,7 @@ function findTagEnd(source: string, start: number, triple: boolean): number {
 	throw new Error("Parse error: unclosed template expression");
 }
 
-function parseTemplate(source: string): Node[] {
+function parseTemplate(source: string, lineAt: (offset: number) => number): Node[] {
 	const root: Node[] = [];
 	// `chained` marks a block opened by `{{else name …}}`: it has no closing tag of
 	// its own and closes with the block it chains from, as in Handlebars.
@@ -262,6 +323,7 @@ function parseTemplate(source: string): Node[] {
 					body: [],
 					inverse: [],
 					inverted: false,
+					loc: { startLine: lineAt(open), endLine: lineAt(open) },
 				};
 				target.push(nested);
 				target = nested.body;
@@ -277,6 +339,7 @@ function parseTemplate(source: string): Node[] {
 				body: [],
 				inverse: [],
 				inverted,
+				loc: { startLine: lineAt(open), endLine: lineAt(open) },
 			};
 			target.push(node);
 			stack.push({ node, target, inverted, chained: false });
@@ -284,10 +347,15 @@ function parseTemplate(source: string): Node[] {
 			continue;
 		}
 		if (raw.startsWith("/")) {
+			const endLine = lineAt(open);
 			let current = stack.pop();
-			while (current?.chained) current = stack.pop();
+			while (current?.chained) {
+				current.node.loc.endLine = endLine;
+				current = stack.pop();
+			}
 			if (!current || current.node.expression.name !== raw.slice(1).trim())
 				throw new Error(`Parse error: mismatched ${raw}`);
+			current.node.loc.endLine = endLine;
 			if (current.inverted) [current.node.body, current.node.inverse] = [current.node.inverse, current.node.body];
 			target = current.target;
 			continue;
@@ -360,8 +428,50 @@ function resolvePath(path: string, frame: Frame): unknown {
 	return typeof value === "function" ? value.call(current.context) : value;
 }
 
-function childFrame(frame: Frame, context: unknown, data = frame.data): Frame {
-	return { context, parents: [frame, ...frame.parents], root: frame.root, data };
+function childFrame(
+	frame: Frame,
+	context: unknown,
+	data = frame.data,
+	enclosing: Enclosing | undefined = frame.enclosing,
+): Frame {
+	return { context, parents: [frame, ...frame.parents], root: frame.root, data, enclosing };
+}
+
+const CONDITIONAL_BLOCKS = new Set(["if", "unless", "has", "when", "ifAny", "ifAll"]);
+
+function describeExpression(expression: Expression): string {
+	if (expression.kind === "path") return expression.value;
+	if (expression.kind === "literal") return JSON.stringify(expression.value);
+	const args = expression.args.map(describeExpression);
+	if (expression.name === "includes" && args.length === 2) return `${args[0]} has ${args[1]}`;
+	if (expression.name === "not" && args.length === 1) return `not ${args[0]}`;
+	return `${expression.name}(${args.join(", ")})`;
+}
+
+function expressionRoots(expression: Expression, into: Set<string>): void {
+	if (expression.kind === "path") {
+		const root = pathParts(expression.value)[0];
+		if (root && root !== "this" && !root.startsWith("@")) into.add(root);
+	} else if (expression.kind === "call") {
+		for (const argument of expression.args) expressionRoots(argument, into);
+	}
+}
+
+function materializeEnclosing(innermost: Enclosing | undefined): EnclosingBlock[] {
+	const blocks: EnclosingBlock[] = [];
+	for (let entry = innermost; entry; entry = entry.parent) {
+		const args = entry.call.args.length ? entry.call.args : [{ kind: "path", value: entry.call.name } as Expression];
+		blocks.push({
+			helper: entry.call.name,
+			branch: entry.branch,
+			args: args.map((argument, index) => {
+				const roots = new Set<string>();
+				expressionRoots(argument, roots);
+				return { text: describeExpression(argument), value: entry.values[index], roots: [...roots] };
+			}),
+		});
+	}
+	return blocks.reverse();
 }
 
 function evaluateExpression(expression: Expression, frame: Frame, evaluation: Evaluation): unknown {
@@ -388,22 +498,31 @@ function renderNodes(nodes: Node[], frame: Frame, evaluation: Evaluation): strin
 }
 
 function helperOptions(
-	name: string,
+	call: CallExpression,
+	args: unknown[],
 	hash: Record<string, unknown>,
 	frame: Frame,
 	evaluation: Evaluation,
 	body: Node[] = [],
 	inverse: Node[] = [],
+	loc?: BlockLoc,
 ): HelperOptions {
+	const conditional = CONDITIONAL_BLOCKS.has(call.name);
+	const inside = (branch: "body" | "inverse"): Enclosing | undefined =>
+		conditional ? { parent: frame.enclosing, call, values: args, branch } : frame.enclosing;
 	return {
-		name,
+		name: call.name,
 		hash,
 		data: frame.data,
 		fn: (context = frame.context, options) =>
-			renderNodes(body, childFrame(frame, context, options?.data ?? frame.data), evaluation),
+			renderNodes(body, childFrame(frame, context, options?.data ?? frame.data, inside("body")), evaluation),
 		inverse: (context = frame.context, options) =>
-			renderNodes(inverse, childFrame(frame, context, options?.data ?? frame.data), evaluation),
+			renderNodes(inverse, childFrame(frame, context, options?.data ?? frame.data, inside("inverse")), evaluation),
 		lookupProperty: property,
+		loc,
+		get enclosing() {
+			return materializeEnclosing(frame.enclosing);
+		},
 	};
 }
 
@@ -423,12 +542,17 @@ function evaluateCall(
 	forceHelper: boolean,
 	body: Node[] = [],
 	inverse: Node[] = [],
+	loc?: BlockLoc,
 ): unknown {
 	const helper = findHelper(call.name, evaluation);
 	const args = call.args.map(argument => evaluateExpression(argument, frame, evaluation));
 	const hash = evaluateHash(call.hash, frame, evaluation);
 	if (helper)
-		return helper.call(frame.context, ...args, helperOptions(call.name, hash, frame, evaluation, body, inverse));
+		return helper.call(
+			frame.context,
+			...args,
+			helperOptions(call, args, hash, frame, evaluation, body, inverse, loc),
+		);
 	// Handlebars built-in: `{{lookup obj key}}` → proto-safe `obj[key]`.
 	// Resolved after user helpers so a registered `lookup` override wins.
 	if (call.name === "lookup" && args.length >= 2) return property(args[0], String(args[1]));
@@ -440,14 +564,27 @@ function evaluateCall(
 function evaluateBlock(node: BlockNode, frame: Frame, evaluation: Evaluation): string {
 	const { name } = node.expression;
 	const helper = findHelper(name, evaluation);
-	if (helper) return stringify(evaluateCall(node.expression, frame, evaluation, true, node.body, node.inverse), false);
+	if (helper)
+		return stringify(
+			evaluateCall(node.expression, frame, evaluation, true, node.body, node.inverse, node.loc),
+			false,
+		);
 	const args = node.expression.args.map(argument => evaluateExpression(argument, frame, evaluation));
 	const value = args.length ? args[0] : resolvePath(name, frame);
 	const hash = evaluateHash(node.expression.hash, frame, evaluation);
 	if (name === "if" || name === "unless") {
 		const truthy = isConditionalTruthy(value, hash.includeZero === true);
 		const branch = name === "if" ? truthy : !truthy;
-		return renderNodes(branch ? node.body : node.inverse, frame, evaluation);
+		return renderNodes(
+			branch ? node.body : node.inverse,
+			childFrame(frame, frame.context, frame.data, {
+				parent: frame.enclosing,
+				call: node.expression,
+				values: args.length ? args : [value],
+				branch: branch ? "body" : "inverse",
+			}),
+			evaluation,
+		);
 	}
 	if (name === "each") {
 		if (Array.isArray(value)) {
@@ -549,10 +686,17 @@ export function registerPartial(name: string, partial: Template): void {
 
 /** Compile a template into a reusable rendering function. */
 export function compile<T = unknown>(source: string, options: CompileOptions = {}): TemplateDelegate<T> {
-	const nodes = parseTemplate(stripStandalone(source));
+	const stripped = stripStandalone(source);
+	const nodes = parseTemplate(stripped.text, stripped.lineAt);
 	return (context, runtime = {}) => {
 		const root = context ?? {};
-		const frame: Frame = { context: root, parents: [], root, data: { root, ...runtime.data } };
+		const frame: Frame = {
+			context: root,
+			parents: [],
+			root,
+			data: { root, ...runtime.data },
+			enclosing: undefined,
+		};
 		return renderNodes(nodes, frame, { helpers, partials, options, runtime });
 	};
 }
@@ -579,10 +723,17 @@ export class TemplateEngine {
 
 	/** Compile a template using this engine's registries. */
 	compile<T = unknown>(source: string, options: CompileOptions = {}): TemplateDelegate<T> {
-		const nodes = parseTemplate(stripStandalone(source));
+		const stripped = stripStandalone(source);
+		const nodes = parseTemplate(stripped.text, stripped.lineAt);
 		return (context, runtime = {}) => {
 			const root = context ?? {};
-			const frame: Frame = { context: root, parents: [], root, data: { root, ...runtime.data } };
+			const frame: Frame = {
+				context: root,
+				parents: [],
+				root,
+				data: { root, ...runtime.data },
+				enclosing: undefined,
+			};
 			return renderNodes(nodes, frame, { helpers: this.#helpers, partials: this.#partials, options, runtime });
 		};
 	}

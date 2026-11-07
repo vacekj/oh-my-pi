@@ -65,6 +65,7 @@ import { toolReadsSkillUris } from "../system-prompt";
 import type { CustomMessage } from "./messages";
 import { SESSION_AGENT_NOTICE_TYPE } from "./queued-messages";
 import type { SessionEntry } from "./session-entries";
+import { isSessionPromptSectionDropped } from "./prompt-sections";
 import type { SessionManager } from "./session-manager";
 
 import { cfgDisabledExtensions, cfgSkills, type SkillsSettings } from "../extensibility/settings";
@@ -398,6 +399,8 @@ export class SessionTools {
 	#presentationPinnedToolNames: ReadonlySet<string> | undefined;
 	#runtimeSelectedToolNames: ReadonlySet<string> | undefined;
 	#baseSystemPrompt: string[];
+	#memoryRecallBlock: string | undefined;
+	#memoryRecallRemoved = false;
 	/**
 	 * Per-turn system prompt returned by a `before_agent_start` extension hook
 	 * ("replace the system prompt for this turn"). While set, base-prompt
@@ -548,6 +551,16 @@ export class SessionTools {
 	/** Current stable base system prompt. */
 	get baseSystemPrompt(): string[] {
 		return this.#baseSystemPrompt;
+	}
+
+	/** The last memory recall block promoted into the prompt, to name it in the prompt's section manifest. */
+	get memoryRecallBlock(): string | undefined {
+		return this.#memoryRecallBlock;
+	}
+
+	/** Whether the session filter kept the last memory recall out of the prompt, to list it as excluded in the prompt's section manifest. */
+	get memoryRecallRemoved(): boolean {
+		return this.#memoryRecallRemoved;
 	}
 
 	/** Replaces the controller-owned base prompt without applying it to the agent. */
@@ -2347,12 +2360,17 @@ export class SessionTools {
 		try {
 			const memory = await backend.beforeAgentStartPrompt(this.#host.memoryBackendSession(), promptText, signal);
 			if (!isCurrent() || !memory) return { systemPrompt: this.#baseSystemPrompt };
-			const injected = memory.context;
+			const removed = !!memory.context && isSessionPromptSectionDropped("memory-recall");
+			const injected = removed ? undefined : memory.context;
 			if (!injected) {
 				return {
 					systemPrompt: this.#baseSystemPrompt,
 					memoryNotice: memory.notice,
-					commit: () => isCurrent() && memory.commit(),
+					commit: () => {
+						if (!isCurrent() || !memory.commit()) return false;
+						if (removed) this.#memoryRecallRemoved = true;
+						return true;
+					},
 				};
 			}
 
@@ -2380,6 +2398,8 @@ export class SessionTools {
 					const currentBase = this.#baseSystemPrompt;
 					this.#host.captureMemoryPromotionSnapshot(currentBase);
 					this.#baseSystemPrompt = currentBase === preparedBase ? stablePrompt : [...currentBase, injected];
+					this.#memoryRecallBlock = injected;
+					this.#memoryRecallRemoved = false;
 					this.#applyAgentSystemPrompt(this.#baseSystemPrompt);
 					return true;
 				},

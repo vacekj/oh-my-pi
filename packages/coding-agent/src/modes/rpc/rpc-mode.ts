@@ -91,7 +91,8 @@ import {
 } from "./rpc-prompt-results";
 import { RpcSessionEventForwarder } from "./rpc-session-events";
 import { isSessionSettled } from "../../session/session-settle";
-import { setSessionPromptSections } from "../../session/prompt-sections";
+import { parsePromptFilter, setSessionPromptSections } from "../../session/prompt-sections";
+import type { PromptFilter } from "../../system-prompt-sources";
 import { RpcSessionSettleWatcher, watchedScheduledTurnProbe } from "./rpc-session-settle";
 import { RpcSubagentRegistry, readRpcSubagentTranscript, resolveOwnedLiveSubagent } from "./rpc-subagents";
 import type {
@@ -2260,7 +2261,23 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			case "set_prompt_sections": {
 				if (session.isCompacting || !isSessionSettled(session, goalTurnScheduled))
 					return error(id, command.type, "Wait for the agent to finish", "session_busy");
-				setSessionPromptSections(command.sections.map(text => ({ title: "", text, enabled: true })));
+				try {
+					setSessionPromptSections(command.sections);
+				} catch (e) {
+					return error(id, command.type, e instanceof Error ? e.message : String(e));
+				}
+				return success(id, command.type);
+			}
+			case "set_prompt_filter": {
+				if (session.isCompacting || !isSessionSettled(session, goalTurnScheduled))
+					return error(id, command.type, "Wait for the agent to finish", "session_busy");
+				let filter: PromptFilter;
+				try {
+					filter = parsePromptFilter(command.filter);
+				} catch (e) {
+					return error(id, command.type, e instanceof Error ? e.message : String(e));
+				}
+				await session.setPromptFilter(filter);
 				return success(id, command.type);
 			}
 			case "get_state": {

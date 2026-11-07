@@ -134,6 +134,11 @@ _SYSTEM_PROMPT_SOURCE_KIND_VALUES: Final[frozenset[str]] = frozenset({"custom-pr
 _decode_system_prompt_source_kind = cast("Decoder[SystemPromptSourceKind]", literal(_SYSTEM_PROMPT_SOURCE_KIND_VALUES))
 
 
+PromptSectionKind: TypeAlias = Literal["template", "session-section", "memory-recall", "custom-prompt", "system-md", "personality", "skill", "always-apply-rule", "rule", "internal-url", "tool", "tool-inventory", "xdev-docs", "workstation", "model", "context-file", "nested-context", "workspace-tree", "workspace-root", "repo-context", "append", "user-append", "eval-prelude"]
+_PROMPT_SECTION_KIND_VALUES: Final[frozenset[str]] = frozenset({"template", "session-section", "memory-recall", "custom-prompt", "system-md", "personality", "skill", "always-apply-rule", "rule", "internal-url", "tool", "tool-inventory", "xdev-docs", "workstation", "model", "context-file", "nested-context", "workspace-tree", "workspace-root", "repo-context", "append", "user-append", "eval-prelude"})
+_decode_prompt_section_kind = cast("Decoder[PromptSectionKind]", literal(_PROMPT_SECTION_KIND_VALUES))
+
+
 SlowModeScope: TypeAlias = Literal["session", "global"]
 """Where `/slow` lives: persisted config shared by every session, or this session's flex tier."""
 _SLOW_MODE_SCOPE_VALUES: Final[frozenset[str]] = frozenset({"session", "global"})
@@ -622,7 +627,7 @@ class SystemPromptTemplate:
 
 @dataclass(slots=True, frozen=True, kw_only=True)
 class SystemPromptGate:
-    """A value the template's conditionals read, and the setting it came from."""
+    """A value the template's conditionals read, or a condition a section needed to render, and the setting it came from."""
     name: str
     value: str
     """The value as text (`true`, `3`, `eager`)."""
@@ -630,8 +635,68 @@ class SystemPromptGate:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class PromptFilter:
+    """Which sections of the system prompt a build keeps. `only` with no ids gives an empty prompt. Tool schemas are not affected."""
+    mode: Literal["exclude", "only"]
+    """`exclude` removes the listed sections and everything inside them; `only` keeps the listed sections (with everything inside) and renders the sections around them with their own text only."""
+    ids: tuple[str, ...]
+    """Section ids (`template:role`, `tools`, `skill:deploy`, `session-section:0`, …)."""
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class PromptSectionInput:
+    """A titled session prompt section; it is reported as `session-section:<n>` under that title."""
+    title: str
+    text: str
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class PromptSectionOrigin:
+    """Where a template section is declared."""
+    file: str
+    """Template file: relative to the omp package for bundled templates, the template's own path otherwise."""
+    start_line: int
+    """1-based line of the section's opening tag."""
+    end_line: int
+    """1-based line of its closing tag."""
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class PromptSectionRef:
+    """A section without its place in the prompt."""
+    id: str
+    parent: str | None
+    title: str
+    kind: PromptSectionKind
+    origin: PromptSectionOrigin | None
+    source: SystemPromptSourceInfo | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class PromptSection:
+    """A template section or an input, located in the prompt. Children lie inside their parent; top-level sections tile every block."""
+    id: str
+    """Stable across rebuilds: `template:<path>`, `tools`, an input's source id (`skill:<name>`, …), `session-section:<n>`, `memory-recall`."""
+    parent: str | None
+    """Enclosing section id."""
+    title: str
+    """Declared in the template next to the section, or the input's label."""
+    kind: PromptSectionKind
+    block: int
+    start: int
+    end: int
+    """`systemPrompt[block].slice(start, end)` is the section's full text, children included."""
+    origin: PromptSectionOrigin | None
+    """Template sections only: where the template declares it."""
+    gates: tuple[SystemPromptGate, ...]
+    """The template conditionals directly around the section that held for it to render, with the setting id when one exists."""
+    source: SystemPromptSourceInfo | None = None
+    """Inputs only: the same info as the matching `sources` entry."""
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class SystemPromptSources:
-    """Which input produced which text of `systemPrompt`. Text no source covers is the template's own."""
+    """Which section or input produced which text of `systemPrompt`."""
     template: SystemPromptTemplate
     tools: tuple[str, ...]
     """Active tool names, the inputs of the template's tool sections."""
@@ -641,6 +706,12 @@ class SystemPromptSources:
     """Inputs that reached the prompt but whose text could not be located exactly."""
     built_blocks: int
     """Blocks from this index on were added after the build (memory recall)."""
+    sections: tuple[PromptSection, ...]
+    """Template sections and inputs as a tree in prompt order, parents before children."""
+    filter: PromptFilter
+    """The filter the build applied."""
+    excluded: tuple[PromptSectionRef, ...]
+    """Sections the filter removed (roots only)."""
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -2053,6 +2124,59 @@ def parse_system_prompt_gate(value: object, path: str = "SystemPromptGate") -> S
     )
 
 
+def parse_prompt_filter(value: object, path: str = "PromptFilter") -> PromptFilter:
+    payload = expect_object(value, path)
+    return PromptFilter(
+        mode=required(payload, "mode", cast('Decoder[Literal["exclude", "only"]]', literal(frozenset({"exclude", "only"}))), path),
+        ids=required(payload, "ids", array(decode_str), path),
+    )
+
+
+def parse_prompt_section_input(value: object, path: str = "PromptSectionInput") -> PromptSectionInput:
+    payload = expect_object(value, path)
+    return PromptSectionInput(
+        title=required(payload, "title", decode_str, path),
+        text=required(payload, "text", decode_str, path),
+    )
+
+
+def parse_prompt_section_origin(value: object, path: str = "PromptSectionOrigin") -> PromptSectionOrigin:
+    payload = expect_object(value, path)
+    return PromptSectionOrigin(
+        file=required(payload, "file", decode_str, path),
+        start_line=required(payload, "startLine", decode_int, path),
+        end_line=required(payload, "endLine", decode_int, path),
+    )
+
+
+def parse_prompt_section_ref(value: object, path: str = "PromptSectionRef") -> PromptSectionRef:
+    payload = expect_object(value, path)
+    return PromptSectionRef(
+        id=required(payload, "id", decode_str, path),
+        parent=required(payload, "parent", nullable(decode_str), path),
+        title=required(payload, "title", decode_str, path),
+        kind=required(payload, "kind", _decode_prompt_section_kind, path),
+        origin=required(payload, "origin", nullable(parse_prompt_section_origin), path),
+        source=optional(payload, "source", parse_system_prompt_source_info, path),
+    )
+
+
+def parse_prompt_section(value: object, path: str = "PromptSection") -> PromptSection:
+    payload = expect_object(value, path)
+    return PromptSection(
+        id=required(payload, "id", decode_str, path),
+        parent=required(payload, "parent", nullable(decode_str), path),
+        title=required(payload, "title", decode_str, path),
+        kind=required(payload, "kind", _decode_prompt_section_kind, path),
+        block=required(payload, "block", decode_int, path),
+        start=required(payload, "start", decode_int, path),
+        end=required(payload, "end", decode_int, path),
+        origin=required(payload, "origin", nullable(parse_prompt_section_origin), path),
+        gates=required(payload, "gates", array(parse_system_prompt_gate), path),
+        source=optional(payload, "source", parse_system_prompt_source_info, path),
+    )
+
+
 def parse_system_prompt_sources(value: object, path: str = "SystemPromptSources") -> SystemPromptSources:
     payload = expect_object(value, path)
     return SystemPromptSources(
@@ -2062,6 +2186,9 @@ def parse_system_prompt_sources(value: object, path: str = "SystemPromptSources"
         sources=required(payload, "sources", array(parse_system_prompt_source), path),
         unlocated=required(payload, "unlocated", array(parse_system_prompt_source_info), path),
         built_blocks=required(payload, "builtBlocks", decode_int, path),
+        sections=required(payload, "sections", array(parse_prompt_section), path),
+        filter=required(payload, "filter", parse_prompt_filter, path),
+        excluded=required(payload, "excluded", array(parse_prompt_section_ref), path),
     )
 
 
@@ -3487,12 +3614,6 @@ class WireClient:
         params: dict[str, object] = {}
         return parse_session_state(self._command("get_state", params), "get_state")
 
-    def set_prompt_sections(self, sections: Sequence[str]) -> None:
-        """Set additional system prompt sections for subsequent turns."""
-        params: dict[str, object] = {}
-        params["sections"] = list(sections)
-        self._command("set_prompt_sections", params)
-
     def set_mcp_overrides(self, overrides: dict[str, bool]) -> None:
         """Set process-local MCP switches without changing shared configuration."""
         params: dict[str, object] = {}
@@ -4223,7 +4344,13 @@ __all__ = [
     "PromoteQueuedMessageResult",
     "PromptAck",
     "PromptError",
+    "PromptFilter",
     "PromptResultEvent",
+    "PromptSection",
+    "PromptSectionInput",
+    "PromptSectionKind",
+    "PromptSectionOrigin",
+    "PromptSectionRef",
     "PromptStatus",
     "PythonExecutionMessage",
     "QueueMode",
@@ -4411,7 +4538,12 @@ __all__ = [
     "parse_promote_queued_message_result",
     "parse_prompt_ack",
     "parse_prompt_error",
+    "parse_prompt_filter",
     "parse_prompt_result_event",
+    "parse_prompt_section",
+    "parse_prompt_section_input",
+    "parse_prompt_section_origin",
+    "parse_prompt_section_ref",
     "parse_python_execution_message",
     "parse_queue_update_event",
     "parse_queued_messages_state",

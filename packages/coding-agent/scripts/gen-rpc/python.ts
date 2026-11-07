@@ -65,6 +65,8 @@ const PYTHON_BINDING: PythonBinding = {
 		"set_host_tools",
 		"set_host_uri_schemes",
 		"get_messages",
+		"set_prompt_sections",
+		"set_prompt_filter",
 	],
 	pathParams: ["open_session.sessionDir", "switch_session.sessionPath", "export_html.outputPath"],
 	pathResults: ["export_html"],

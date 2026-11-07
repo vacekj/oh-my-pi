@@ -78,7 +78,69 @@ export const stateDefs = {
 	},
 	SystemPromptGate: doc(
 		{ name: "string", value: doc("string", "The value as text (`true`, `3`, `eager`)."), "setting?": "string" },
-		"A value the template's conditionals read, and the setting it came from.",
+		"A value the template's conditionals read, or a condition a section needed to render, and the setting it came from.",
+	),
+	PromptFilter: doc(
+		{
+			mode: doc(
+				"'exclude' | 'only'",
+				"`exclude` removes the listed sections and everything inside them; `only` keeps the listed sections (with everything inside) and renders the sections around them with their own text only.",
+			),
+			ids: doc("string[]", "Section ids (`template:role`, `tools`, `skill:deploy`, `session-section:0`, …)."),
+		},
+		"Which sections of the system prompt a build keeps. `only` with no ids gives an empty prompt. Tool schemas are not affected.",
+	),
+	PromptSectionInput: doc(
+		{ title: "string", text: "string" },
+		"A titled session prompt section; it is reported as `session-section:<n>` under that title.",
+	),
+	PromptSectionKind:
+		"'template' | 'session-section' | 'memory-recall' | 'custom-prompt' | 'system-md' | 'personality' | 'skill' | 'always-apply-rule' | 'rule' | 'internal-url' | 'tool' | 'tool-inventory' | 'xdev-docs' | 'workstation' | 'model' | 'context-file' | 'nested-context' | 'workspace-tree' | 'workspace-root' | 'repo-context' | 'append' | 'user-append' | 'eval-prelude'",
+	PromptSectionOrigin: doc(
+		{
+			file: doc(
+				"string",
+				"Template file: relative to the omp package for bundled templates, the template's own path otherwise.",
+			),
+			startLine: doc("number.integer", "1-based line of the section's opening tag."),
+			endLine: doc("number.integer", "1-based line of its closing tag."),
+		},
+		"Where a template section is declared.",
+	),
+	PromptSectionRef: doc(
+		{
+			id: "string",
+			parent: "string | null",
+			title: "string",
+			kind: "PromptSectionKind",
+			origin: "PromptSectionOrigin | null",
+			"source?": "SystemPromptSourceInfo",
+		},
+		"A section without its place in the prompt.",
+	),
+	PromptSection: doc(
+		{
+			id: doc(
+				"string",
+				"Stable across rebuilds: `template:<path>`, `tools`, an input's source id (`skill:<name>`, …), `session-section:<n>`, `memory-recall`.",
+			),
+			parent: doc("string | null", "Enclosing section id."),
+			title: doc("string", "Declared in the template next to the section, or the input's label."),
+			kind: "PromptSectionKind",
+			block: "number.integer",
+			start: "number.integer",
+			end: doc(
+				"number.integer",
+				"`systemPrompt[block].slice(start, end)` is the section's full text, children included.",
+			),
+			origin: doc("PromptSectionOrigin | null", "Template sections only: where the template declares it."),
+			"source?": doc("SystemPromptSourceInfo", "Inputs only: the same info as the matching `sources` entry."),
+			gates: doc(
+				"SystemPromptGate[]",
+				"The template conditionals directly around the section that held for it to render, with the setting id when one exists.",
+			),
+		},
+		"A template section or an input, located in the prompt. Children lie inside their parent; top-level sections tile every block.",
 	),
 	SystemPromptSources: doc(
 		{
@@ -91,8 +153,14 @@ export const stateDefs = {
 				"Inputs that reached the prompt but whose text could not be located exactly.",
 			),
 			builtBlocks: doc("number.integer", "Blocks from this index on were added after the build (memory recall)."),
+			sections: doc(
+				"PromptSection[]",
+				"Template sections and inputs as a tree in prompt order, parents before children.",
+			),
+			filter: doc("PromptFilter", "The filter the build applied."),
+			excluded: doc("PromptSectionRef[]", "Sections the filter removed (roots only)."),
 		},
-		"Which input produced which text of `systemPrompt`. Text no source covers is the template's own.",
+		"Which section or input produced which text of `systemPrompt`.",
 	),
 	QueuedMessagesState: doc(
 		{

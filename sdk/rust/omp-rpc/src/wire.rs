@@ -3036,7 +3036,7 @@ pub struct SystemPromptTemplate {
 	pub path: Option<String>,
 }
 
-/// A value the template's conditionals read, and the setting it came from.
+/// A value the template's conditionals read, or a condition a section needed to render, and the setting it came from.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SystemPromptGate {
 	pub name: String,
@@ -3046,7 +3046,156 @@ pub struct SystemPromptGate {
 	pub setting: Option<String>,
 }
 
-/// Which input produced which text of `systemPrompt`. Text no source covers is the template's own.
+/// Which sections of the system prompt a build keeps. `only` with no ids gives an empty prompt. Tool schemas are not affected.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PromptFilter {
+	/// `exclude` removes the listed sections and everything inside them; `only` keeps the listed sections (with everything inside) and renders the sections around them with their own text only.
+	pub mode: PromptFilterMode,
+	/// Section ids (`template:role`, `tools`, `skill:deploy`, `session-section:0`, …).
+	pub ids: Vec<String>,
+}
+
+/// A titled session prompt section; it is reported as `session-section:<n>` under that title.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PromptSectionInput {
+	pub title: String,
+	pub text: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum PromptSectionKind {
+	#[serde(rename = "template")]
+	Template,
+	#[serde(rename = "session-section")]
+	SessionSection,
+	#[serde(rename = "memory-recall")]
+	MemoryRecall,
+	#[serde(rename = "custom-prompt")]
+	CustomPrompt,
+	#[serde(rename = "system-md")]
+	SystemMd,
+	#[serde(rename = "personality")]
+	Personality,
+	#[serde(rename = "skill")]
+	Skill,
+	#[serde(rename = "always-apply-rule")]
+	AlwaysApplyRule,
+	#[serde(rename = "rule")]
+	Rule,
+	#[serde(rename = "internal-url")]
+	InternalUrl,
+	#[serde(rename = "tool")]
+	Tool,
+	#[serde(rename = "tool-inventory")]
+	ToolInventory,
+	#[serde(rename = "xdev-docs")]
+	XdevDocs,
+	#[serde(rename = "workstation")]
+	Workstation,
+	#[serde(rename = "model")]
+	Model,
+	#[serde(rename = "context-file")]
+	ContextFile,
+	#[serde(rename = "nested-context")]
+	NestedContext,
+	#[serde(rename = "workspace-tree")]
+	WorkspaceTree,
+	#[serde(rename = "workspace-root")]
+	WorkspaceRoot,
+	#[serde(rename = "repo-context")]
+	RepoContext,
+	#[serde(rename = "append")]
+	Append,
+	#[serde(rename = "user-append")]
+	UserAppend,
+	#[serde(rename = "eval-prelude")]
+	EvalPrelude,
+}
+
+impl PromptSectionKind {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Template => "template",
+			Self::SessionSection => "session-section",
+			Self::MemoryRecall => "memory-recall",
+			Self::CustomPrompt => "custom-prompt",
+			Self::SystemMd => "system-md",
+			Self::Personality => "personality",
+			Self::Skill => "skill",
+			Self::AlwaysApplyRule => "always-apply-rule",
+			Self::Rule => "rule",
+			Self::InternalUrl => "internal-url",
+			Self::Tool => "tool",
+			Self::ToolInventory => "tool-inventory",
+			Self::XdevDocs => "xdev-docs",
+			Self::Workstation => "workstation",
+			Self::Model => "model",
+			Self::ContextFile => "context-file",
+			Self::NestedContext => "nested-context",
+			Self::WorkspaceTree => "workspace-tree",
+			Self::WorkspaceRoot => "workspace-root",
+			Self::RepoContext => "repo-context",
+			Self::Append => "append",
+			Self::UserAppend => "user-append",
+			Self::EvalPrelude => "eval-prelude",
+		}
+	}
+}
+
+/// Where a template section is declared.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PromptSectionOrigin {
+	/// Template file: relative to the omp package for bundled templates, the template's own path otherwise.
+	pub file: String,
+	/// 1-based line of the section's opening tag.
+	#[serde(rename = "startLine")]
+	pub start_line: i64,
+	/// 1-based line of its closing tag.
+	#[serde(rename = "endLine")]
+	pub end_line: i64,
+}
+
+/// A section without its place in the prompt.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PromptSectionRef {
+	pub id: String,
+	#[serde(deserialize_with = "Deserialize::deserialize")]
+	pub parent: Option<String>,
+	pub title: String,
+	pub kind: PromptSectionKind,
+	#[serde(deserialize_with = "Deserialize::deserialize")]
+	pub origin: Option<PromptSectionOrigin>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub source: Option<SystemPromptSourceInfo>,
+}
+
+/// A template section or an input, located in the prompt. Children lie inside their parent; top-level sections tile every block.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PromptSection {
+	/// Stable across rebuilds: `template:<path>`, `tools`, an input's source id (`skill:<name>`, …), `session-section:<n>`, `memory-recall`.
+	pub id: String,
+	/// Enclosing section id.
+	#[serde(deserialize_with = "Deserialize::deserialize")]
+	pub parent: Option<String>,
+	/// Declared in the template next to the section, or the input's label.
+	pub title: String,
+	pub kind: PromptSectionKind,
+	pub block: i64,
+	pub start: i64,
+	/// `systemPrompt[block].slice(start, end)` is the section's full text, children included.
+	pub end: i64,
+	/// Template sections only: where the template declares it.
+	#[serde(deserialize_with = "Deserialize::deserialize")]
+	pub origin: Option<PromptSectionOrigin>,
+	/// The template conditionals directly around the section that held for it to render, with the setting id when one exists.
+	pub gates: Vec<SystemPromptGate>,
+	/// Inputs only: the same info as the matching `sources` entry.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub source: Option<SystemPromptSourceInfo>,
+}
+
+/// Which section or input produced which text of `systemPrompt`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SystemPromptSources {
 	pub template: SystemPromptTemplate,
@@ -3059,6 +3208,12 @@ pub struct SystemPromptSources {
 	/// Blocks from this index on were added after the build (memory recall).
 	#[serde(rename = "builtBlocks")]
 	pub built_blocks: i64,
+	/// Template sections and inputs as a tree in prompt order, parents before children.
+	pub sections: Vec<PromptSection>,
+	/// The filter the build applied.
+	pub filter: PromptFilter,
+	/// Sections the filter removed (roots only).
+	pub excluded: Vec<PromptSectionRef>,
 }
 
 /// Displayable queue-chip text for pending user-authored messages; accepted verbatim by `remove_queued_message`.
@@ -5364,7 +5519,12 @@ pub struct OpenSessionParams {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetPromptSectionsParams {
-	pub sections: Vec<String>,
+	pub sections: Vec<StringOrPromptSectionInput>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetPromptFilterParams {
+	pub filter: PromptFilter,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -6068,6 +6228,24 @@ impl SystemPromptTemplateKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum PromptFilterMode {
+	#[serde(rename = "exclude")]
+	Exclude,
+	#[serde(rename = "only")]
+	Only,
+}
+
+impl PromptFilterMode {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Exclude => "exclude",
+			Self::Only => "only",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum GoalModeStateMode {
 	#[serde(rename = "active")]
 	Active,
@@ -6206,6 +6384,14 @@ impl HostUriResultContentType {
 			Self::TextPlain => "text/plain",
 		}
 	}
+}
+
+/// Untagged union: the first variant that decodes wins.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum StringOrPromptSectionInput {
+	String(String),
+	PromptSectionInput(PromptSectionInput),
 }
 
 fn default_queued_messages_state_live_steered() -> i64 {
@@ -6526,14 +6712,31 @@ impl Command for GetStateCommand {
 	}
 }
 
-/// Set additional system prompt sections for subsequent turns.
+/// Set additional system prompt sections for subsequent turns: plain text, or titled sections reported as `session-section:<n>`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetPromptSectionsCommand {
-	pub sections: Vec<String>,
+	pub sections: Vec<StringOrPromptSectionInput>,
 }
 
 impl Command for SetPromptSectionsCommand {
 	const NAME: &'static str = "set_prompt_sections";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = ();
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		let _ = data;
+		Ok(())
+	}
+}
+
+/// Choose which system prompt sections the session keeps. The prompt is rebuilt, so the next `get_state` reflects it, and applies from the next turn.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetPromptFilterCommand {
+	pub filter: PromptFilter,
+}
+
+impl Command for SetPromptFilterCommand {
+	const NAME: &'static str = "set_prompt_filter";
 	const TIMEOUT_MS: Option<u64> = None;
 	type Output = ();
 

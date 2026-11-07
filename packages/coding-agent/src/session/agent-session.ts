@@ -228,7 +228,12 @@ import { cfgSecretsEnabled } from "../secrets/settings";
 import { releaseSharpshooterSession } from "../sharpshooter/backend";
 import { flushSharpshooterExtraction } from "../sharpshooter/extract";
 import { toolReadsSkillUris } from "../system-prompt";
-import type { SystemPromptDescription } from "../system-prompt-sources";
+import type {
+	AppendedPromptBlock,
+	PromptFilter,
+	RemovedPromptBlock,
+	SystemPromptDescription,
+} from "../system-prompt-sources";
 import {
 	AUTO_THINKING,
 	type ConfiguredThinkingLevel,
@@ -479,7 +484,12 @@ import { buildSessionMetadata } from "./session-metadata";
 import { SessionProviderBoundary, type SessionProviderBoundaryHost } from "./session-provider-boundary";
 import { SessionStatsTracker, type SessionStatsTrackerHost } from "./session-stats";
 import { SessionTools, type SessionToolsHost } from "./session-tools";
-import { getSessionPromptParts } from "./prompt-sections";
+import {
+	getRemovedSessionPromptBlocks,
+	getSessionPromptBlocks,
+	isSessionPromptSectionDropped,
+	setSessionPromptFilter,
+} from "./prompt-sections";
 import { resolveOpenAIWebsocketPreference } from "./settings-stream-fn";
 import type { ShakeMode, ShakeResult } from "./shake-types";
 import { ToolChoiceQueue } from "./tool-choice-queue";
@@ -909,7 +919,13 @@ export class AgentSession implements SettingsScope {
 	#costCapRefusal: CostCapRefusal | undefined;
 	/** Entries of tools mounted under `xd://`; empty when virtual devices are unmounted. */
 	getXdevToolEntries: () => Array<{ name: string; summary: string }>;
-	readonly #describeSystemPrompt: ((prompt: readonly string[]) => SystemPromptDescription | null) | undefined;
+	readonly #describeSystemPrompt:
+		| ((
+				prompt: readonly string[],
+				appended: readonly AppendedPromptBlock[],
+				removed: readonly RemovedPromptBlock[],
+		  ) => SystemPromptDescription | null)
+		| undefined;
 	readonly yieldQueue: YieldQueue;
 	editStore?: EditStore;
 
@@ -6964,7 +6980,31 @@ export class AgentSession implements SettingsScope {
 	 * the turn); `undefined` when the session builds no manifests.
 	 */
 	get systemPromptSources(): SystemPromptDescription | null | undefined {
-		return this.#describeSystemPrompt?.(this.agent.state.systemPrompt);
+		const recall = this.#tools.memoryRecallBlock;
+		const recallRemoved = this.#tools.memoryRecallRemoved && isSessionPromptSectionDropped("memory-recall");
+		return this.#describeSystemPrompt?.(
+			this.agent.state.systemPrompt,
+			[
+				...getSessionPromptBlocks(),
+				...(recall
+					? [{ id: "memory-recall", kind: "memory-recall" as const, title: "Memory recall", text: recall }]
+					: []),
+			],
+			[
+				...getRemovedSessionPromptBlocks(),
+				...(recallRemoved ? [{ id: "memory-recall", kind: "memory-recall" as const, title: "Memory recall" }] : []),
+			],
+		);
+	}
+
+	/**
+	 * Chooses which system prompt sections the session keeps and rebuilds the
+	 * base prompt, so {@link systemPromptSources} reflects it at once and the next
+	 * turn runs with it.
+	 */
+	async setPromptFilter(filter: PromptFilter): Promise<void> {
+		setSessionPromptFilter(filter);
+		await this.refreshBaseSystemPrompt();
 	}
 
 	/** Base system prompt blocks the next turn builds on, before any `before_agent_start` override. */
@@ -8740,7 +8780,7 @@ export class AgentSession implements SettingsScope {
 			const sourceBase = this.#tools.baseSystemPrompt;
 			const basePreparation = await this.#tools.buildSystemPromptForAgentStart(prompt, isCurrent, signal);
 			if (!isCurrent()) return cancelled;
-			const additionalParts = getSessionPromptParts();
+			const additionalParts = getSessionPromptBlocks().map(block => block.text);
 			const preparedPrompt = additionalParts.length
 				? [...basePreparation.systemPrompt, ...additionalParts]
 				: basePreparation.systemPrompt;

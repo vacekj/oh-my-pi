@@ -459,7 +459,7 @@ export interface SystemPromptTemplate {
 	path?: string;
 }
 
-/** A value the template's conditionals read, and the setting it came from. */
+/** A value the template's conditionals read, or a condition a section needed to render, and the setting it came from. */
 export interface SystemPromptGate {
 	name: string;
 	/** The value as text (`true`, `3`, `eager`). */
@@ -467,7 +467,64 @@ export interface SystemPromptGate {
 	setting?: string;
 }
 
-/** Which input produced which text of `systemPrompt`. Text no source covers is the template's own. */
+/** Which sections of the system prompt a build keeps. `only` with no ids gives an empty prompt. Tool schemas are not affected. */
+export interface PromptFilter {
+	/** `exclude` removes the listed sections and everything inside them; `only` keeps the listed sections (with everything inside) and renders the sections around them with their own text only. */
+	mode: "exclude" | "only";
+	/** Section ids (`template:role`, `tools`, `skill:deploy`, `session-section:0`, …). */
+	ids: string[];
+}
+
+/** A titled session prompt section; it is reported as `session-section:<n>` under that title. */
+export interface PromptSectionInput {
+	title: string;
+	text: string;
+}
+
+export type PromptSectionKind = "template" | "session-section" | "memory-recall" | "custom-prompt" | "system-md" | "personality" | "skill" | "always-apply-rule" | "rule" | "internal-url" | "tool" | "tool-inventory" | "xdev-docs" | "workstation" | "model" | "context-file" | "nested-context" | "workspace-tree" | "workspace-root" | "repo-context" | "append" | "user-append" | "eval-prelude";
+
+/** Where a template section is declared. */
+export interface PromptSectionOrigin {
+	/** Template file: relative to the omp package for bundled templates, the template's own path otherwise. */
+	file: string;
+	/** 1-based line of the section's opening tag. */
+	startLine: number;
+	/** 1-based line of its closing tag. */
+	endLine: number;
+}
+
+/** A section without its place in the prompt. */
+export interface PromptSectionRef {
+	id: string;
+	parent: string | null;
+	title: string;
+	kind: PromptSectionKind;
+	origin: PromptSectionOrigin | null;
+	source?: SystemPromptSourceInfo;
+}
+
+/** A template section or an input, located in the prompt. Children lie inside their parent; top-level sections tile every block. */
+export interface PromptSection {
+	/** Stable across rebuilds: `template:<path>`, `tools`, an input's source id (`skill:<name>`, …), `session-section:<n>`, `memory-recall`. */
+	id: string;
+	/** Enclosing section id. */
+	parent: string | null;
+	/** Declared in the template next to the section, or the input's label. */
+	title: string;
+	kind: PromptSectionKind;
+	block: number;
+	start: number;
+	/** `systemPrompt[block].slice(start, end)` is the section's full text, children included. */
+	end: number;
+	/** Template sections only: where the template declares it. */
+	origin: PromptSectionOrigin | null;
+	/** The template conditionals directly around the section that held for it to render, with the setting id when one exists. */
+	gates: SystemPromptGate[];
+	/** Inputs only: the same info as the matching `sources` entry. */
+	source?: SystemPromptSourceInfo;
+}
+
+/** Which section or input produced which text of `systemPrompt`. */
 export interface SystemPromptSources {
 	template: SystemPromptTemplate;
 	/** Active tool names, the inputs of the template's tool sections. */
@@ -478,6 +535,12 @@ export interface SystemPromptSources {
 	unlocated: SystemPromptSourceInfo[];
 	/** Blocks from this index on were added after the build (memory recall). */
 	builtBlocks: number;
+	/** Template sections and inputs as a tree in prompt order, parents before children. */
+	sections: PromptSection[];
+	/** The filter the build applied. */
+	filter: PromptFilter;
+	/** Sections the filter removed (roots only). */
+	excluded: PromptSectionRef[];
 }
 
 /** Displayable queue-chip text for pending user-authored messages; accepted verbatim by `remove_queued_message`. */
@@ -1633,7 +1696,11 @@ export interface OpenSessionParams {
 }
 
 export interface SetPromptSectionsParams {
-	sections: string[];
+	sections: (string | PromptSectionInput)[];
+}
+
+export interface SetPromptFilterParams {
+	filter: PromptFilter;
 }
 
 export interface SetMcpOverridesParams {
@@ -1978,6 +2045,7 @@ export interface RpcWireCommands {
 	open_session: { params: OpenSessionParams; result: OpenSessionResult };
 	get_state: { params: undefined; result: SessionState };
 	set_prompt_sections: { params: SetPromptSectionsParams; result: undefined };
+	set_prompt_filter: { params: SetPromptFilterParams; result: undefined };
 	set_mcp_overrides: { params: SetMcpOverridesParams; result: undefined };
 	set_fast_mode: { params: SetFastModeParams; result: FastModeResult };
 	set_slow_mode: { params: SetSlowModeParams; result: SetSlowModeResult };

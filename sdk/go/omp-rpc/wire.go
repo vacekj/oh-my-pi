@@ -2411,7 +2411,7 @@ func (v *SystemPromptTemplateKind) UnmarshalJSON(data []byte) error {
 	return unknownValue("SystemPromptTemplateKind", s)
 }
 
-// A value the template's conditionals read, and the setting it came from.
+// A value the template's conditionals read, or a condition a section needed to render, and the setting it came from.
 type SystemPromptGate struct {
 	Name string `json:"name"`
 	// The value as text (`true`, `3`, `eager`).
@@ -2436,7 +2436,216 @@ func (v *SystemPromptGate) decodeFrom(raw map[string]json.RawMessage) error {
 	return nil
 }
 
-// Which input produced which text of `systemPrompt`. Text no source covers is the template's own.
+// Which sections of the system prompt a build keeps. `only` with no ids gives an empty prompt. Tool schemas are not affected.
+type PromptFilter struct {
+	// `exclude` removes the listed sections and everything inside them; `only` keeps the listed sections (with everything inside) and renders the sections around them with their own text only.
+	Mode PromptFilterMode `json:"mode"`
+	// Section ids (`template:role`, `tools`, `skill:deploy`, `session-section:0`, …).
+	Ids []string `json:"ids"`
+}
+
+func (v *PromptFilter) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "PromptFilter", v.decodeFrom)
+}
+
+func (v *PromptFilter) decodeFrom(raw map[string]json.RawMessage) error {
+	var out PromptFilter
+	d := fieldDecoder{raw: raw, owner: "PromptFilter"}
+	d.required("mode", &out.Mode)
+	d.required("ids", &out.Ids)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type PromptFilterMode string
+
+const (
+	PromptFilterModeExclude PromptFilterMode = "exclude"
+	PromptFilterModeOnly    PromptFilterMode = "only"
+)
+
+func (v *PromptFilterMode) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "PromptFilterMode")
+	if err != nil {
+		return err
+	}
+	switch value := PromptFilterMode(s); value {
+	case PromptFilterModeExclude, PromptFilterModeOnly:
+		*v = value
+		return nil
+	}
+	return unknownValue("PromptFilterMode", s)
+}
+
+// A titled session prompt section; it is reported as `session-section:<n>` under that title.
+type PromptSectionInput struct {
+	Title string `json:"title"`
+	Text  string `json:"text"`
+}
+
+func (v *PromptSectionInput) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "PromptSectionInput", v.decodeFrom)
+}
+
+func (v *PromptSectionInput) decodeFrom(raw map[string]json.RawMessage) error {
+	var out PromptSectionInput
+	d := fieldDecoder{raw: raw, owner: "PromptSectionInput"}
+	d.required("title", &out.Title)
+	d.required("text", &out.Text)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type PromptSectionKind string
+
+const (
+	PromptSectionKindTemplate        PromptSectionKind = "template"
+	PromptSectionKindSessionSection  PromptSectionKind = "session-section"
+	PromptSectionKindMemoryRecall    PromptSectionKind = "memory-recall"
+	PromptSectionKindCustomPrompt    PromptSectionKind = "custom-prompt"
+	PromptSectionKindSystemMd        PromptSectionKind = "system-md"
+	PromptSectionKindPersonality     PromptSectionKind = "personality"
+	PromptSectionKindSkill           PromptSectionKind = "skill"
+	PromptSectionKindAlwaysApplyRule PromptSectionKind = "always-apply-rule"
+	PromptSectionKindRule            PromptSectionKind = "rule"
+	PromptSectionKindInternalURL     PromptSectionKind = "internal-url"
+	PromptSectionKindTool            PromptSectionKind = "tool"
+	PromptSectionKindToolInventory   PromptSectionKind = "tool-inventory"
+	PromptSectionKindXdevDocs        PromptSectionKind = "xdev-docs"
+	PromptSectionKindWorkstation     PromptSectionKind = "workstation"
+	PromptSectionKindModel           PromptSectionKind = "model"
+	PromptSectionKindContextFile     PromptSectionKind = "context-file"
+	PromptSectionKindNestedContext   PromptSectionKind = "nested-context"
+	PromptSectionKindWorkspaceTree   PromptSectionKind = "workspace-tree"
+	PromptSectionKindWorkspaceRoot   PromptSectionKind = "workspace-root"
+	PromptSectionKindRepoContext     PromptSectionKind = "repo-context"
+	PromptSectionKindAppend          PromptSectionKind = "append"
+	PromptSectionKindUserAppend      PromptSectionKind = "user-append"
+	PromptSectionKindEvalPrelude     PromptSectionKind = "eval-prelude"
+)
+
+func (v *PromptSectionKind) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "PromptSectionKind")
+	if err != nil {
+		return err
+	}
+	switch value := PromptSectionKind(s); value {
+	case PromptSectionKindTemplate, PromptSectionKindSessionSection, PromptSectionKindMemoryRecall, PromptSectionKindCustomPrompt, PromptSectionKindSystemMd, PromptSectionKindPersonality, PromptSectionKindSkill, PromptSectionKindAlwaysApplyRule, PromptSectionKindRule, PromptSectionKindInternalURL, PromptSectionKindTool, PromptSectionKindToolInventory, PromptSectionKindXdevDocs, PromptSectionKindWorkstation, PromptSectionKindModel, PromptSectionKindContextFile, PromptSectionKindNestedContext, PromptSectionKindWorkspaceTree, PromptSectionKindWorkspaceRoot, PromptSectionKindRepoContext, PromptSectionKindAppend, PromptSectionKindUserAppend, PromptSectionKindEvalPrelude:
+		*v = value
+		return nil
+	}
+	return unknownValue("PromptSectionKind", s)
+}
+
+// Where a template section is declared.
+type PromptSectionOrigin struct {
+	// Template file: relative to the omp package for bundled templates, the template's own path otherwise.
+	File string `json:"file"`
+	// 1-based line of the section's opening tag.
+	StartLine int64 `json:"startLine"`
+	// 1-based line of its closing tag.
+	EndLine int64 `json:"endLine"`
+}
+
+func (v *PromptSectionOrigin) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "PromptSectionOrigin", v.decodeFrom)
+}
+
+func (v *PromptSectionOrigin) decodeFrom(raw map[string]json.RawMessage) error {
+	var out PromptSectionOrigin
+	d := fieldDecoder{raw: raw, owner: "PromptSectionOrigin"}
+	d.required("file", &out.File)
+	d.required("startLine", &out.StartLine)
+	d.required("endLine", &out.EndLine)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+// A section without its place in the prompt.
+type PromptSectionRef struct {
+	ID     string                  `json:"id"`
+	Parent *string                 `json:"parent"`
+	Title  string                  `json:"title"`
+	Kind   PromptSectionKind       `json:"kind"`
+	Origin *PromptSectionOrigin    `json:"origin"`
+	Source *SystemPromptSourceInfo `json:"source,omitempty"`
+}
+
+func (v *PromptSectionRef) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "PromptSectionRef", v.decodeFrom)
+}
+
+func (v *PromptSectionRef) decodeFrom(raw map[string]json.RawMessage) error {
+	var out PromptSectionRef
+	d := fieldDecoder{raw: raw, owner: "PromptSectionRef"}
+	d.required("id", &out.ID)
+	d.nullable("parent", &out.Parent)
+	d.required("title", &out.Title)
+	d.required("kind", &out.Kind)
+	d.nullable("origin", &out.Origin)
+	d.optional("source", &out.Source)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+// A template section or an input, located in the prompt. Children lie inside their parent; top-level sections tile every block.
+type PromptSection struct {
+	// Stable across rebuilds: `template:<path>`, `tools`, an input's source id (`skill:<name>`, …), `session-section:<n>`, `memory-recall`.
+	ID string `json:"id"`
+	// Enclosing section id.
+	Parent *string `json:"parent"`
+	// Declared in the template next to the section, or the input's label.
+	Title string            `json:"title"`
+	Kind  PromptSectionKind `json:"kind"`
+	Block int64             `json:"block"`
+	Start int64             `json:"start"`
+	// `systemPrompt[block].slice(start, end)` is the section's full text, children included.
+	End int64 `json:"end"`
+	// Template sections only: where the template declares it.
+	Origin *PromptSectionOrigin `json:"origin"`
+	// The template conditionals directly around the section that held for it to render, with the setting id when one exists.
+	Gates []SystemPromptGate `json:"gates"`
+	// Inputs only: the same info as the matching `sources` entry.
+	Source *SystemPromptSourceInfo `json:"source,omitempty"`
+}
+
+func (v *PromptSection) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "PromptSection", v.decodeFrom)
+}
+
+func (v *PromptSection) decodeFrom(raw map[string]json.RawMessage) error {
+	var out PromptSection
+	d := fieldDecoder{raw: raw, owner: "PromptSection"}
+	d.required("id", &out.ID)
+	d.nullable("parent", &out.Parent)
+	d.required("title", &out.Title)
+	d.required("kind", &out.Kind)
+	d.required("block", &out.Block)
+	d.required("start", &out.Start)
+	d.required("end", &out.End)
+	d.nullable("origin", &out.Origin)
+	d.required("gates", &out.Gates)
+	d.optional("source", &out.Source)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+// Which section or input produced which text of `systemPrompt`.
 type SystemPromptSources struct {
 	Template SystemPromptTemplate `json:"template"`
 	// Active tool names, the inputs of the template's tool sections.
@@ -2447,6 +2656,12 @@ type SystemPromptSources struct {
 	Unlocated []SystemPromptSourceInfo `json:"unlocated"`
 	// Blocks from this index on were added after the build (memory recall).
 	BuiltBlocks int64 `json:"builtBlocks"`
+	// Template sections and inputs as a tree in prompt order, parents before children.
+	Sections []PromptSection `json:"sections"`
+	// The filter the build applied.
+	Filter PromptFilter `json:"filter"`
+	// Sections the filter removed (roots only).
+	Excluded []PromptSectionRef `json:"excluded"`
 }
 
 func (v *SystemPromptSources) UnmarshalJSON(data []byte) error {
@@ -2462,6 +2677,9 @@ func (v *SystemPromptSources) decodeFrom(raw map[string]json.RawMessage) error {
 	d.required("sources", &out.Sources)
 	d.required("unlocated", &out.Unlocated)
 	d.required("builtBlocks", &out.BuiltBlocks)
+	d.required("sections", &out.Sections)
+	d.required("filter", &out.Filter)
+	d.required("excluded", &out.Excluded)
 	if d.err != nil {
 		return d.err
 	}
@@ -8078,12 +8296,56 @@ func (c Commands) GetState(ctx context.Context) (SessionState, error) {
 
 // SetPromptSectionsCommand holds the parameters of "set_prompt_sections".
 type SetPromptSectionsCommand struct {
-	Sections []string `json:"sections"`
+	Sections []StringOrPromptSectionInput `json:"sections"`
 }
 
-// SetPromptSections sends "set_prompt_sections": Set additional system prompt sections for subsequent turns.
+// SetPromptSections sends "set_prompt_sections": Set additional system prompt sections for subsequent turns: plain text, or titled sections reported as `session-section:<n>`.
 func (c Commands) SetPromptSections(ctx context.Context, p SetPromptSectionsCommand) error {
 	return c.call(ctx, "set_prompt_sections", p, 0, nil)
+}
+
+// StringOrPromptSectionInput holds exactly one of its fields, chosen by the JSON kind of the value.
+type StringOrPromptSectionInput struct {
+	String             *string
+	PromptSectionInput *PromptSectionInput
+}
+
+func (v StringOrPromptSectionInput) MarshalJSON() ([]byte, error) {
+	switch {
+	case v.String != nil:
+		return json.Marshal(*v.String)
+	case v.PromptSectionInput != nil:
+		return json.Marshal(*v.PromptSectionInput)
+	}
+	return nil, emptyUnion("StringOrPromptSectionInput")
+}
+
+func (v *StringOrPromptSectionInput) UnmarshalJSON(data []byte) error {
+	var out StringOrPromptSectionInput
+	var err error
+	switch jsonKind(data) {
+	case '"':
+		err = json.Unmarshal(data, &out.String)
+	case '{':
+		err = json.Unmarshal(data, &out.PromptSectionInput)
+	default:
+		return unexpectedKind("StringOrPromptSectionInput", data)
+	}
+	if err != nil {
+		return err
+	}
+	*v = out
+	return nil
+}
+
+// SetPromptFilterCommand holds the parameters of "set_prompt_filter".
+type SetPromptFilterCommand struct {
+	Filter PromptFilter `json:"filter"`
+}
+
+// SetPromptFilter sends "set_prompt_filter": Choose which system prompt sections the session keeps. The prompt is rebuilt, so the next `get_state` reflects it, and applies from the next turn.
+func (c Commands) SetPromptFilter(ctx context.Context, p SetPromptFilterCommand) error {
+	return c.call(ctx, "set_prompt_filter", p, 0, nil)
 }
 
 // SetMcpOverridesCommand holds the parameters of "set_mcp_overrides".

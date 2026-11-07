@@ -87,8 +87,13 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 	{ name: "get_state", doc: "Snapshot the session state.", result: "SessionState" },
 	{
 		name: "set_prompt_sections",
-		doc: "Set additional system prompt sections for subsequent turns.",
-		params: { sections: "string[]" },
+		doc: "Set additional system prompt sections for subsequent turns: plain text, or titled sections reported as `session-section:<n>`.",
+		params: { sections: "(string | PromptSectionInput)[]" },
+	},
+	{
+		name: "set_prompt_filter",
+		doc: "Choose which system prompt sections the session keeps. The prompt is rebuilt, so the next `get_state` reflects it, and applies from the next turn.",
+		params: { filter: "PromptFilter" },
 	},
 	{
 		name: "set_mcp_overrides",
