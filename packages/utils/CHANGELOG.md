@@ -5,6 +5,8 @@
 ### Added
 
 - Added a caller-owned `wait` hook to `fetchWithRetry` for shared retry budgets and cancellation.
+- Template block helpers receive `loc` (the source lines of their opening and closing tags) and `enclosing` (the conditional blocks they render inside, with the branch taken), so a helper can report where it was declared and what had to hold for it to render.
+
 ### Removed
 
 - Removed `getAutoQaDbPath()`

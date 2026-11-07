@@ -25,7 +25,7 @@ import type { CacheWarmingMode } from "../../session/cache-warmer";
 import type { FileEntry, SessionEntry, SessionTreeNode } from "../../session/session-entries";
 import type { UsageLimitState } from "../../session/usage-limit";
 import type { AvailableSlashCommandSource } from "../../slash-commands/available-commands";
-import type { SystemPromptDescription } from "../../system-prompt-sources";
+import type { PromptFilter, SystemPromptDescription } from "../../system-prompt-sources";
 import type { AgentProgress } from "@oh-my-pi/pi-tui/tools/task";
 import type { SubagentEventPayload, SubagentLifecyclePayload, SubagentProgressPayload } from "../../task";
 import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
@@ -65,7 +65,8 @@ export type RpcCommand =
 	// State
 	| { id?: string; type: "get_state" }
 	| { id?: string; type: "set_mcp_overrides"; overrides: Record<string, boolean> }
-	| { id?: string; type: "set_prompt_sections"; sections: string[] }
+	| { id?: string; type: "set_prompt_sections"; sections: Array<string | { title: string; text: string }> }
+	| { id?: string; type: "set_prompt_filter"; filter: PromptFilter }
 	| { id?: string; type: "set_fast_mode"; enabled: boolean }
 	| { id?: string; type: "set_slow_mode"; enabled: boolean }
 	| {
@@ -470,6 +471,7 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "get_state"; success: true; data: RpcSessionState }
 	| { id?: string; type: "response"; command: "set_mcp_overrides"; success: true }
 	| { id?: string; type: "response"; command: "set_prompt_sections"; success: true }
+	| { id?: string; type: "response"; command: "set_prompt_filter"; success: true }
 	| {
 			id?: string;
 			type: "response";

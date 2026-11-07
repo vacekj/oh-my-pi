@@ -1,10 +1,14 @@
+{{#section "project/context" title="Project context"}}
 <project-context>
+{{#section "project/workstation" title="Workstation"}}
 <workstation>
 {{#list environment prefix="- " join="\n"}}{{label}}: {{value}}{{/list}}
 {{#if model}}- Model: {{model}}{{/if}}
 </workstation>
+{{/section}}
 
 {{#if contextFiles.length}}
+{{#section "project/repo-rules" title="Context files"}}
 <repo-rules>
 MUST follow these context files for all tasks:
 {{#each contextFiles}}
@@ -13,22 +17,28 @@ MUST follow these context files for all tasks:
 </file>
 {{/each}}
 </repo-rules>
+{{/section}}
 {{/if}}
 
 {{#if agentsMdSearch.files.length}}
+{{#section "project/dir-context" title="Nested context directories"}}
 <dir-context>
 Some directories may have rules; deeper rules override higher ones.
 Before changes in these directories, MUST read:
 {{#list agentsMdSearch.files join="\n"}}- {{this}}{{/list}}
 </dir-context>
+{{/section}}
 {{/if}}
 
 {{#ifAny contextFiles.length agentsMdSearch.files.length}}
+{{#section "project/context-notice" title="Context files notice"}}
 Context files above auto-loaded. NEVER `grep`/`glob` for `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, or similar agent/context files: relevant files already in context; others noise.
+{{/section}}
 {{/ifAny}}
 
 {{#if includeWorkspaceTree}}
 {{#if workspaceTree.rendered}}
+{{#section "project/workspace-tree" title="Workspace tree"}}
 <workspace-tree>
 Working-directory layout: newest mtime first; depth ≤ 3.
 {{workspaceTree.rendered}}
@@ -36,21 +46,28 @@ Working-directory layout: newest mtime first; depth ≤ 3.
 {{#has tools "glob"}}{{#has tools "read"}}Some entries elided to shorten tree — use `{{toolRefs.glob}}`/`{{toolRefs.read}}` to drill in.{{/has}}{{/has}}
 {{/if}}
 </workspace-tree>
+{{/section}}
 {{/if}}
 {{/if}}
 {{#if additionalWorkspaceRoots.length}}
+{{#section "project/workspace-roots" title="Additional workspace roots"}}
 <workspace-roots>
 Additional workspace directories. This CURRENT workspace state supersedes workspace changes mentioned earlier in the conversation. {{#ifAny (includes tools "read") (includes tools "grep") (includes tools "glob") (includes tools "edit")}}Use absolute paths under these roots to {{#has tools "read"}}`{{toolRefs.read}}`{{/has}}{{#has tools "grep"}}{{#ifAny (includes tools "read")}}/{{/ifAny}}`{{toolRefs.grep}}`{{/has}}{{#has tools "glob"}}{{#ifAny (includes tools "read") (includes tools "grep")}}/{{/ifAny}}`{{toolRefs.glob}}`{{/has}}{{#has tools "edit"}}{{#ifAny (includes tools "read") (includes tools "grep") (includes tools "glob")}}/{{/ifAny}}`{{toolRefs.edit}}`{{/has}}.{{/ifAny}} Manage with `/add-dir` and `/remove-dir`; `/dirs` lists them.
 {{#each additionalWorkspaceRoots}}
 - {{this}}
 {{/each}}
 </workspace-roots>
+{{/section}}
 {{/if}}
 {{#if activeRepoContext}}
+{{#section "project/active-repo" title="Active repository"}}
 {{activeRepoContext}}
+{{/section}}
 {{/if}}
 </project-context>
+{{/section}}
 
+{{#section "project/critical" title="Critical rules"}}
 <critical>
 - Each response MUST advance the task; completion only stopping condition.
 - MUST default to informed action; do not ask for confirmation when tools or repo context can answer.
@@ -60,7 +77,10 @@ Additional workspace directories. This CURRENT workspace state supersedes worksp
 - Before yielding, MUST verify significant behavioral changes: run the specific test, command, or scenario covering the change.
 {{/if}}
 </critical>
+{{/section}}
 
 {{#if appendPrompt}}
+{{#section "project/append" title="Appended prompt"}}
 {{appendPrompt}}
+{{/section}}
 {{/if}}

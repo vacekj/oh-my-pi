@@ -147,3 +147,60 @@ describe("template semantics", () => {
 		expect(engine.compile("{{name}}/{{missing.path}}")({ name: "property" })).toBe("helper/");
 	});
 });
+
+describe("block locations and enclosing conditionals", () => {
+	it("reports the source lines of a block, counting the lines standalone tags occupy", () => {
+		const engine = create();
+		const seen: Array<{ startLine: number; endLine: number } | undefined> = [];
+		engine.registerHelper("probe", function (this: unknown, options: HelperOptions) {
+			seen.push(options.loc);
+			return options.fn(this);
+		});
+		engine.compile("intro\n{{#if on}}\nbody\n{{#probe}}\nx\ny\n{{/probe}}\n{{/if}}\n{{#probe}}z{{/probe}}\n")({
+			on: true,
+		});
+		expect(seen).toEqual([
+			{ startLine: 4, endLine: 7 },
+			{ startLine: 9, endLine: 9 },
+		]);
+	});
+
+	it("lists the conditionals around a call with the branch taken and what they read", () => {
+		const engine = create();
+		let enclosing: HelperOptions["enclosing"] = [];
+		engine.registerHelper("probe", function (this: unknown, options: HelperOptions) {
+			enclosing = options.enclosing;
+			return "";
+		});
+		engine.registerHelper(
+			"has",
+			function (this: unknown, collection: unknown, item: unknown, options: HelperOptions) {
+				return (collection as unknown[]).includes(item) ? options.fn(this) : options.inverse(this);
+			},
+		);
+		engine.compile(
+			'{{#if skills.length}}{{#unless off}}{{#has tools "think"}}{{#each skills}}{{probe}}{{/each}}{{else}}no{{/has}}{{/unless}}{{/if}}',
+		)({
+			skills: [1],
+			off: false,
+			tools: ["think"],
+		});
+		expect(enclosing.map(block => [block.helper, block.branch, block.args.map(arg => arg.text)])).toEqual([
+			["if", "body", ["skills.length"]],
+			["unless", "body", ["off"]],
+			["has", "body", ["tools", '"think"']],
+		]);
+		expect(enclosing[0].args[0]).toMatchObject({ value: 1, roots: ["skills"] });
+	});
+
+	it("marks the inverse branch of a conditional", () => {
+		const engine = create();
+		let branch = "";
+		engine.registerHelper("probe", function (this: unknown, options: HelperOptions) {
+			branch = options.enclosing.map(block => block.branch).join();
+			return "";
+		});
+		engine.compile("{{#if on}}a{{else}}{{probe}}{{/if}}")({ on: false });
+		expect(branch).toBe("inverse");
+	});
+});

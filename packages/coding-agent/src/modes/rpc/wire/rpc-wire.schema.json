@@ -143,8 +143,19 @@
 			},
 			{
 				"name": "set_prompt_sections",
-				"doc": "Set additional system prompt sections for subsequent turns.",
+				"doc": "Set additional system prompt sections for subsequent turns: plain text, or titled sections reported as `session-section:<n>`.",
 				"params": "SetPromptSectionsParams",
+				"result": null,
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "set_prompt_filter",
+				"doc": "Choose which system prompt sections the session keeps. The prompt is rebuilt, so the next `get_state` reflects it, and applies from the next turn.",
+				"params": "SetPromptFilterParams",
 				"result": null,
 				"nullable": false,
 				"unwrap": null,
@@ -2613,7 +2624,215 @@
 				"name",
 				"value"
 			],
-			"description": "A value the template's conditionals read, and the setting it came from."
+			"description": "A value the template's conditionals read, or a condition a section needed to render, and the setting it came from."
+		},
+		"PromptFilter": {
+			"type": "object",
+			"properties": {
+				"mode": {
+					"enum": [
+						"exclude",
+						"only"
+					],
+					"type": "string",
+					"description": "`exclude` removes the listed sections and everything inside them; `only` keeps the listed sections (with everything inside) and renders the sections around them with their own text only."
+				},
+				"ids": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"description": "Section ids (`template:role`, `tools`, `skill:deploy`, `session-section:0`, …)."
+				}
+			},
+			"required": [
+				"mode",
+				"ids"
+			],
+			"description": "Which sections of the system prompt a build keeps. `only` with no ids gives an empty prompt. Tool schemas are not affected."
+		},
+		"PromptSectionInput": {
+			"type": "object",
+			"properties": {
+				"title": {
+					"type": "string"
+				},
+				"text": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"title",
+				"text"
+			],
+			"description": "A titled session prompt section; it is reported as `session-section:<n>` under that title."
+		},
+		"PromptSectionKind": {
+			"enum": [
+				"template",
+				"session-section",
+				"memory-recall",
+				"custom-prompt",
+				"system-md",
+				"personality",
+				"skill",
+				"always-apply-rule",
+				"rule",
+				"internal-url",
+				"tool",
+				"tool-inventory",
+				"xdev-docs",
+				"workstation",
+				"model",
+				"context-file",
+				"nested-context",
+				"workspace-tree",
+				"workspace-root",
+				"repo-context",
+				"append",
+				"user-append",
+				"eval-prelude"
+			],
+			"type": "string"
+		},
+		"PromptSectionOrigin": {
+			"type": "object",
+			"properties": {
+				"file": {
+					"type": "string",
+					"description": "Template file: relative to the omp package for bundled templates, the template's own path otherwise."
+				},
+				"startLine": {
+					"type": "integer",
+					"description": "1-based line of the section's opening tag."
+				},
+				"endLine": {
+					"type": "integer",
+					"description": "1-based line of its closing tag."
+				}
+			},
+			"required": [
+				"file",
+				"startLine",
+				"endLine"
+			],
+			"description": "Where a template section is declared."
+		},
+		"PromptSectionRef": {
+			"type": "object",
+			"properties": {
+				"id": {
+					"type": "string"
+				},
+				"parent": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"title": {
+					"type": "string"
+				},
+				"kind": {
+					"$ref": "#/$defs/PromptSectionKind"
+				},
+				"origin": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/PromptSectionOrigin"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"source": {
+					"$ref": "#/$defs/SystemPromptSourceInfo"
+				}
+			},
+			"required": [
+				"id",
+				"parent",
+				"title",
+				"kind",
+				"origin"
+			],
+			"description": "A section without its place in the prompt."
+		},
+		"PromptSection": {
+			"type": "object",
+			"properties": {
+				"id": {
+					"type": "string",
+					"description": "Stable across rebuilds: `template:<path>`, `tools`, an input's source id (`skill:<name>`, …), `session-section:<n>`, `memory-recall`."
+				},
+				"parent": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					],
+					"description": "Enclosing section id."
+				},
+				"title": {
+					"type": "string",
+					"description": "Declared in the template next to the section, or the input's label."
+				},
+				"kind": {
+					"$ref": "#/$defs/PromptSectionKind"
+				},
+				"block": {
+					"type": "integer"
+				},
+				"start": {
+					"type": "integer"
+				},
+				"end": {
+					"type": "integer",
+					"description": "`systemPrompt[block].slice(start, end)` is the section's full text, children included."
+				},
+				"origin": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/PromptSectionOrigin"
+						},
+						{
+							"type": "null"
+						}
+					],
+					"description": "Template sections only: where the template declares it."
+				},
+				"gates": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/SystemPromptGate"
+					},
+					"description": "The template conditionals directly around the section that held for it to render, with the setting id when one exists."
+				},
+				"source": {
+					"$ref": "#/$defs/SystemPromptSourceInfo",
+					"description": "Inputs only: the same info as the matching `sources` entry."
+				}
+			},
+			"required": [
+				"id",
+				"parent",
+				"title",
+				"kind",
+				"block",
+				"start",
+				"end",
+				"origin",
+				"gates"
+			],
+			"description": "A template section or an input, located in the prompt. Children lie inside their parent; top-level sections tile every block."
 		},
 		"SystemPromptSources": {
 			"type": "object",
@@ -2650,6 +2869,24 @@
 				"builtBlocks": {
 					"type": "integer",
 					"description": "Blocks from this index on were added after the build (memory recall)."
+				},
+				"sections": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/PromptSection"
+					},
+					"description": "Template sections and inputs as a tree in prompt order, parents before children."
+				},
+				"filter": {
+					"$ref": "#/$defs/PromptFilter",
+					"description": "The filter the build applied."
+				},
+				"excluded": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/PromptSectionRef"
+					},
+					"description": "Sections the filter removed (roots only)."
 				}
 			},
 			"required": [
@@ -2658,9 +2895,12 @@
 				"gates",
 				"sources",
 				"unlocated",
-				"builtBlocks"
+				"builtBlocks",
+				"sections",
+				"filter",
+				"excluded"
 			],
-			"description": "Which input produced which text of `systemPrompt`. Text no source covers is the template's own."
+			"description": "Which section or input produced which text of `systemPrompt`."
 		},
 		"QueuedMessagesState": {
 			"type": "object",
@@ -6523,12 +6763,30 @@
 				"sections": {
 					"type": "array",
 					"items": {
-						"type": "string"
+						"anyOf": [
+							{
+								"type": "string"
+							},
+							{
+								"$ref": "#/$defs/PromptSectionInput"
+							}
+						]
 					}
 				}
 			},
 			"required": [
 				"sections"
+			]
+		},
+		"SetPromptFilterParams": {
+			"type": "object",
+			"properties": {
+				"filter": {
+					"$ref": "#/$defs/PromptFilter"
+				}
+			},
+			"required": [
+				"filter"
 			]
 		},
 		"SetMcpOverridesParams": {

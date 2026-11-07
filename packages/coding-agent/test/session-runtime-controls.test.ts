@@ -4,7 +4,13 @@ import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
 import { getMcpSessionOverrides, setMcpSessionOverrides } from "@oh-my-pi/pi-coding-agent/mcp/session-overrides";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { FileSessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
-import { getSessionPromptParts, setSessionPromptSections } from "@oh-my-pi/pi-coding-agent/session/prompt-sections";
+import {
+	getSessionPromptBlocks,
+	getSessionPromptFilter,
+	parsePromptFilter,
+	setSessionPromptFilter,
+	setSessionPromptSections,
+} from "@oh-my-pi/pi-coding-agent/session/prompt-sections";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 test("hot swapping disconnects only the changed MCP and reconnects it without shared writes", async () => {
@@ -67,11 +73,53 @@ test("prompt sections keep order, omit disabled parts, and can be replaced", () 
 			{ title: "off", text: "Hidden", enabled: false },
 			{ title: "two", text: "Second", enabled: true },
 		]);
-		expect(getSessionPromptParts()).toEqual(["First", "Second"]);
+		expect(getSessionPromptBlocks().map(block => block.text)).toEqual(["First", "Second"]);
 		setSessionPromptSections([]);
-		expect(getSessionPromptParts()).toEqual([]);
+		expect(getSessionPromptBlocks()).toEqual([]);
 		expect(() => setSessionPromptSections([{ title: "bad", text: "x".repeat(50_001), enabled: true }])).toThrow();
 	} finally {
 		setSessionPromptSections([]);
 	}
+});
+
+test("prompt sections accept plain text and titled sections, and report each under its index", () => {
+	try {
+		setSessionPromptSections([
+			"Plain",
+			{ title: "Style", text: "Terse" },
+			{ title: "Off", text: "x", enabled: false },
+		]);
+		expect(getSessionPromptBlocks()).toEqual([
+			{ id: "session-section:0", kind: "session-section", title: "Session section 1", text: "Plain" },
+			{ id: "session-section:1", kind: "session-section", title: "Style", text: "Terse" },
+		]);
+		expect(() => setSessionPromptSections([{ text: "no title" }])).toThrow("Invalid prompt section");
+	} finally {
+		setSessionPromptSections([]);
+	}
+});
+
+test("the prompt filter removes session sections it excludes, and keeps only the ones it lists", () => {
+	try {
+		setSessionPromptSections([
+			{ title: "a", text: "A" },
+			{ title: "b", text: "B" },
+		]);
+		setSessionPromptFilter({ mode: "exclude", ids: ["session-section:0"] });
+		expect(getSessionPromptBlocks().map(block => block.id)).toEqual(["session-section:1"]);
+		setSessionPromptFilter({ mode: "only", ids: [] });
+		expect(getSessionPromptBlocks()).toEqual([]);
+		setSessionPromptFilter({ mode: "only", ids: ["session-section:0"] });
+		expect(getSessionPromptBlocks().map(block => block.id)).toEqual(["session-section:0"]);
+	} finally {
+		setSessionPromptSections([]);
+		setSessionPromptFilter({ mode: "exclude", ids: [] });
+	}
+});
+
+test("a prompt filter must name a mode and string ids", () => {
+	expect(parsePromptFilter({ mode: "only", ids: ["tools", "tools"] })).toEqual({ mode: "only", ids: ["tools"] });
+	expect(() => parsePromptFilter({ mode: "some", ids: [] })).toThrow("Invalid prompt filter");
+	expect(() => parsePromptFilter({ mode: "only", ids: [1] })).toThrow("Invalid prompt filter");
+	expect(getSessionPromptFilter()).toEqual({ mode: "exclude", ids: [] });
 });
