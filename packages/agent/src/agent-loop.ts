@@ -2735,7 +2735,10 @@ function retainCompletedToolCalls(
 	let droppedIncompleteToolCall = false;
 	const content = message.content.filter(block => {
 		if (block.type !== "toolCall") return true;
-		const keep = completedToolCallIds.has(block.id);
+		// Server execution proof survives even when transport death prevents a
+		// toolcall_end event. Dropping it would make a side-effecting turn replayable.
+		const keep =
+			(block as CursorExecResolvedCarrier)[kCursorExecResolved] === true || completedToolCallIds.has(block.id);
 		if (!keep) droppedIncompleteToolCall = true;
 		return keep;
 	});
