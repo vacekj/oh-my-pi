@@ -28,6 +28,32 @@ export interface EmbedOptions extends NativeEmbedTarget {
 	readonly nativeDir?: string;
 	/** Release every embedded addon must be stamped with; defaults to this package's version. */
 	readonly version?: string;
+	/** Optional persistent cache for compressed addon bytes, keyed by content, Bun version and compression level. */
+	readonly cacheDir?: string;
+}
+
+async function compressAddon(bytes: Uint8Array, cacheDir: string | undefined): Promise<Uint8Array> {
+	if (!cacheDir) return Bun.zstdCompress(bytes, { level: EMBEDDED_ADDON_ZSTD_LEVEL });
+	const digest = Bun.SHA256.hash(bytes, "hex");
+	const file = path.join(cacheDir, `${Bun.version}-${EMBEDDED_ADDON_ZSTD_LEVEL}-${digest}.zst`);
+	try {
+		const cached = await Bun.file(file).bytes();
+		// Never embed a truncated or stale cache entry into an executable.
+		if (Bun.SHA256.hash(await Bun.zstdDecompress(cached), "hex") === digest) return cached;
+	} catch {
+		// A missing, unreadable or invalid cache entry is rebuilt from the verified addon.
+	}
+	const frame = await Bun.zstdCompress(bytes, { level: EMBEDDED_ADDON_ZSTD_LEVEL });
+	const temporary = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+	try {
+		await Bun.write(temporary, frame);
+		await fs.rename(temporary, file);
+	} catch {
+		// Caching is optional; a read-only cache must not prevent a build.
+	} finally {
+		await fs.rm(temporary, { force: true }).catch(() => {});
+	}
+	return frame;
 }
 
 /**
@@ -38,7 +64,7 @@ export interface EmbedOptions extends NativeEmbedTarget {
  * (no timestamps, no container), which keeps release-to-release binary patches
  * small.
  *
- * Nothing is written to disk. Bun.build shares the runtime's directory cache
+ * Overrides stay in memory; only an optional compression cache is written to disk. Bun.build shares the runtime's directory cache
  * and never re-reads it on a miss, so a process that imported pi-natives before
  * writing the frames cannot resolve them; in-memory files bypass that lookup.
  *
@@ -50,6 +76,7 @@ export async function embeddedAddonFiles({
 	arch,
 	nativeDir = defaultNativeDir,
 	version = packageJson.version,
+	cacheDir,
 }: EmbedOptions): Promise<Record<string, string | Uint8Array>> {
 	const platformTag = `${platform}-${arch}`;
 	const candidates =
@@ -86,9 +113,7 @@ export async function embeddedAddonFiles({
 	}
 
 	// Variants compress concurrently on Bun's thread pool.
-	const frames = await Promise.all(
-		available.map(({ bytes }) => Bun.zstdCompress(bytes, { level: EMBEDDED_ADDON_ZSTD_LEVEL })),
-	);
+	const frames = await Promise.all(available.map(({ bytes }) => compressAddon(bytes, cacheDir)));
 	const imports = available.map(
 		({ filename }, index) =>
 			`import zstdPath${index} from ${JSON.stringify(`./${filename}.zst`)} with { type: "file" };`,

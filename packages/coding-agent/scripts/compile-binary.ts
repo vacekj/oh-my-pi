@@ -26,6 +26,8 @@ export interface CodingAgentCompileOptions {
 	 * compiles without one (probe builds that never load the addon).
 	 */
 	readonly native: NativeEmbedTarget | null;
+	/** Optional content-addressed native compression cache used by local rebuilds. */
+	readonly nativeCacheDir?: string;
 	/** Optional cross-compilation runtime target. */
 	readonly target?: Bun.Build.CompileTarget;
 	/** Optional unmodified Bun executable used as the standalone runtime template. */
@@ -50,7 +52,7 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 			entrypoints: [options.entrypoint],
 			root: options.repoRoot,
 			external: [...COMPILED_EXTERNAL_DEPENDENCIES],
-			files: options.native ? await embeddedAddonFiles(options.native) : {},
+			files: options.native ? await embeddedAddonFiles({ ...options.native, cacheDir: options.nativeCacheDir }) : {},
 			define: {
 				"process.env.PI_COMPILED": JSON.stringify("true"),
 				"process.env.PI_DOCS_EMBED": JSON.stringify((await buildDocsIndexPayload()).payload),
