@@ -2401,6 +2401,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			deferFallbackChainValidation: this.#fallbackChainValidationDeferred,
 			unexpectedStopJudgeTimeoutMs: config.unexpectedStopJudgeTimeoutMs,
 		});
+		this.agent.streamFn = this.#recovery.wrapStreamFn(this.agent.streamFn);
 		this.#detachUsageBeforeQueueDequeue = this.agent.addBeforeQueuedMessageDequeueHook(async signal => {
 			if (
 				!cfgRetryUsageAwareFallback.get(this.settings) ||

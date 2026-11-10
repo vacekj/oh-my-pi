@@ -1860,6 +1860,7 @@ function mapOptionsForApiFresh<TApi extends Api>(
 		streamFirstEventTimeoutMs: options?.streamFirstEventTimeoutMs,
 		streamIdleTimeoutMs: options?.streamIdleTimeoutMs,
 		codexSseMaxAttempts: options?.codexSseMaxAttempts,
+		providerRetryWait: options?.providerRetryWait,
 		providerSessionState: options?.providerSessionState,
 		parentSessionId: options?.parentSessionId,
 		statefulResponses: options?.statefulResponses,

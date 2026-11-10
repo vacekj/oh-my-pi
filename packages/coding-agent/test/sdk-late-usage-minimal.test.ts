@@ -177,4 +177,88 @@ describe("SDK delayed quota error after a provider switch", () => {
 		expect(last?.role).toBe("assistant");
 		if (last?.role === "assistant") expect(last.stopReason).toBe("stop");
 	});
+
+	it("does not charge the old provider's bounded recovery window to the selected model", async () => {
+		registerMockApi(SOURCE);
+		const root = TempDir.createSync("@pi-sdk-late-window-");
+		cleanups.push(() => root.removeSync());
+		const auth = createInMemoryAuthStorage();
+		cleanups.push(() => auth.close());
+		auth.keys.setRuntime("openai-codex", "test-key");
+		auth.keys.setRuntime("anthropic", "test-key");
+		const settings = Settings.isolated({
+			"retry.enabled": true,
+			"retry.maxRetries": 2,
+			"retry.maxElapsedMs": 60_000,
+			"retry.baseDelayMs": 1,
+			"retry.maxDelayMs": 100,
+			"retry.modelFallback": false,
+			"compaction.enabled": false,
+			"todo.enabled": false,
+		});
+		const registry = new ModelRegistry(auth, root.join("models.yml"), { settings });
+		const secondStarted = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const calls: string[] = [];
+		const oldModel = createMockModel({
+			provider: "openai-codex",
+			id: "gpt-6.1-sol-sdk-late-window",
+			handler: async () => {
+				calls.push("old");
+				if (calls.length === 1) return { stopReason: "error", errorMessage: "500 Internal Server Error" };
+				secondStarted.resolve();
+				await release.promise;
+				return {
+					stopReason: "error",
+					errorMessage: "429 usage_limit_reached: You've reached your ChatGPT plan limit. Try again in ~9701 min.",
+				};
+			},
+		});
+		let selectedCalls = 0;
+		const selectedModel = createMockModel({
+			provider: "anthropic",
+			id: "claude-sdk-late-window",
+			handler: () => {
+				calls.push("selected");
+				selectedCalls++;
+				if (selectedCalls === 1) return { stopReason: "error", errorMessage: "500 Internal Server Error" };
+				return { content: ["recovered"], stopReason: "stop" };
+			},
+		});
+		const { session } = await createAgentSession({
+			cwd: root.path(),
+			agentDir: root.path(),
+			modelRegistry: registry,
+			model: oldModel,
+			getApiKey: () => "test-key",
+			sessionManager: SessionManager.inMemory(root.path()),
+			settings,
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			skipPythonPreflight: true,
+			cacheWarming: false,
+		});
+		cleanups.push(() => session.dispose());
+		vi.spyOn(auth.limits, "markReached").mockResolvedValue({ switched: false });
+		const prompting = session.prompt("hello");
+		try {
+			await secondStarted.promise;
+			session.agent.setModel(selectedModel);
+		} finally {
+			release.resolve();
+		}
+		await prompting;
+		await session.waitForIdle();
+		// The selected model's own failure gets a retry: the old provider's two
+		// attempts do not count against its `retry.maxRetries`.
+		expect(calls).toEqual(["old", "old", "selected", "selected"]);
+		const last = session.agent.state.messages.at(-1);
+		expect(last?.role).toBe("assistant");
+		if (last?.role === "assistant") expect(last.stopReason).toBe("stop");
+	});
 });

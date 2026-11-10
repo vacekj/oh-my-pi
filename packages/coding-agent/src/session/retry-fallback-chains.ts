@@ -646,7 +646,6 @@ export function findRetryFallbackCandidates(
 		parsedConfigured ??
 		(currentPlainSelector ? parseRetryFallbackSelector(currentPlainSelector, context.modelLookup) : undefined);
 	if (!parsedCurrent) return chain;
-	if (chain.length <= 1) return [];
 	const currentBaseSelector = formatRetryFallbackBaseSelector(parsedCurrent);
 	const currentPlainBaseSelector =
 		parsedCurrent && currentPlainSelector && currentPlainSelector !== currentSelector

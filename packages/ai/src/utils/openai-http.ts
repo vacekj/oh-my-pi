@@ -71,6 +71,8 @@ export interface OpenAIStreamRequestInit {
 	fetch?: FetchImpl;
 	/** Override the default transport attempt budget for this request. */
 	maxAttempts?: number;
+	/** Shared session recovery wait and budget gate. */
+	providerRetryWait?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
 	/** Optional caller-specific gate composed with shared transport retry exclusions. */
 	shouldRetryResponse?: (response: Response, bodyText: string) => boolean | Promise<boolean>;
 	/**
@@ -108,6 +110,7 @@ export async function postOpenAIStream<TEvent>(init: OpenAIStreamRequestInit): P
 			signal: init.signal,
 			fetch: init.fetch,
 			maxAttempts: init.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
+			wait: init.providerRetryWait,
 			// A server/gateway `x-should-retry: false` verdict is terminal, as it was
 			// under the removed SDK client. A proxy concurrency-admission 429
 			// (`rate_limit_type: max_parallel_requests`) surfaces immediately instead of

@@ -1916,6 +1916,7 @@ async function openCodexSseTransport(
 				options?.codexSseMaxAttempts,
 				event => options?.onSseEvent?.(event, model),
 				wrapFetchForRequestCompression(options?.fetch ?? fetch, model),
+				options?.providerRetryWait,
 			),
 		);
 	};
@@ -4068,6 +4069,7 @@ async function openCodexSseEventStream(
 	codexSseMaxAttempts: number | undefined,
 	onSseEvent?: OpenAICodexResponsesOptions["onSseEvent"],
 	fetchOverride?: FetchImpl,
+	providerRetryWait?: OpenAICodexResponsesOptions["providerRetryWait"],
 ): Promise<AsyncGenerator<Record<string, unknown>>> {
 	const headers = createCodexHeaders(
 		requestHeaders,
@@ -4135,6 +4137,7 @@ async function openCodexSseEventStream(
 			defaultDelayMs: attempt => CODEX_RETRY_DELAY_MS * (attempt + 1),
 			maxDelayMs: CODEX_RATE_LIMIT_BUDGET_MS,
 			fetch: fetchAttempt,
+			wait: providerRetryWait,
 			timeout: false,
 		});
 	} catch (error) {

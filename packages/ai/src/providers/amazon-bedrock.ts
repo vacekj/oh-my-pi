@@ -308,6 +308,7 @@ async function sendBedrockRequest(
 			body,
 			signal: watchdog.signal,
 			fetch: options.fetch,
+			wait: options.providerRetryWait,
 			timeout: false,
 		});
 		if (!response.ok && endpoint === "invoke-with-response-stream")

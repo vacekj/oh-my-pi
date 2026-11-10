@@ -77,6 +77,7 @@ Retry state is owned by `TurnRecovery`:
 - retry attempt counter (`0` means idle)
 - retry lifecycle promise and resolver
 - retry backoff abort controller
+- optional per-model recovery deadline and shared transport/session retry count (`retry.maxElapsedMs > 0`)
 
 Flow (`#handleRetryableError`):
 
@@ -90,6 +91,14 @@ Flow (`#handleRetryableError`):
 8. If the final delay exceeds `retry.maxDelayMs` and no credential/model switch happened, emit final failure without sleeping, except an authoritative usage-reset wait explicitly allowed by `retry.waitForUsageReset`.
 9. Record the recoverable error, emit `auto_retry_start`, and remove the failed assistant from active context unless preserving a resolved interrupted tool turn or proven-unexecuted tool-call/result pairs.
 10.   Sleep with abort support, then schedule `agent.continue()` through the post-prompt task scheduler for the same prompt generation.
+
+### Total recovery deadline
+
+`retry.maxElapsedMs` defaults to `0`, preserving the ordering above. A positive value starts one recovery window at the first provider error (including an internal transport retry wait), not at the beginning of a healthy request. Retryable failures stay on the current model before consulting fallback, subject to both `retry.maxRetries` and the remaining elapsed budget. Provider-internal retries share the same attempt count; credential rotation does not reset it. Non-retryable errors and classifier refusals retain their immediate fallback behavior.
+
+The window includes backoff, credential/reset waits, and in-flight recovery streams. A wait that cannot fit causes immediate fallback; a hung stream is aborted and settled even when a provider ignores its abort signal. Partial content is retained for the existing replay-safety checks, so reaching the deadline never authorizes repeating tool side effects. `retry.waitForUsageReset` does not override this total cap. User cancellation stops recovery without switching models.
+
+Exhaustion consults the configured fallback chain, still subject to `retry.modelFallback`, `retry.fallbackOn`, explicit-model restrictions, and replay safety. Without an eligible fallback, the error surfaces. Successful responses clear the window; every fallback model begins with a fresh retry count and starts its own deadline only if it fails. For example, `maxRetries: 3` and `maxElapsedMs: 30000` allow no more than three recovery requests within 30 seconds of the first failure on a model. A late usage-limit error from a provider the session has already left does not spend the selected model's window.
 
 ### What resets retry counters
 
