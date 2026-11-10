@@ -393,6 +393,8 @@ const SCRUBBED_ENV_NAMES = new Set([
 	"GOOGLE_APPLICATION_CREDENTIALS",
 	"ANTHROPIC_OAUTH_TOKEN",
 	"XAI_OAUTH_TOKEN",
+	// Session-writing tests choose their own conflict policy, independent of the hosting agent.
+	"OMP_STRICT_SESSION_LOCK",
 ]);
 
 function isScrubbedEnvVar(key: string): boolean {
@@ -1017,11 +1019,11 @@ if (!(requestedMode in validModes)) {
 
 const requestedCommands = selectShard(await commandsForMode(requestedMode as Mode), Bun.env.OMP_TEST_SHARD);
 const explicitConcurrency = Boolean(Bun.env.OMP_TEST_CONCURRENCY?.trim());
-// CI defaults to one process at a time, but memory-sized workflow buckets
-// explicitly opt into bounded process concurrency. Local runs fan out by
-// default and may use the same override. Resolved before the dry-run check so
-// `--dry-run` prints the argv the real run would use, budget included.
-const pooled = requestedCommands.length > 1 && (!isCI() || explicitConcurrency);
+// Explicit local modes fan out even in agent shells that export CI=true.
+// Workflow bucket modes keep their memory-safe CI default unless concurrency
+// is explicitly configured. Resolve before dry-run so its argv includes the budget.
+const localMode = args.includes("--local") || requestedMode === "local" || requestedMode === "local-ts";
+const pooled = requestedCommands.length > 1 && (localMode || !isCI() || explicitConcurrency);
 // The sequential path is a pool of one, so a lone chunk keeps the whole budget.
 const poolWidth = pooled
 	? testConcurrency(requestedCommands.length, Bun.env.OMP_TEST_CONCURRENCY, os.availableParallelism())

@@ -27,6 +27,23 @@ flag bypasses each package's `check` script. Stable TypeScript is retained only
 for publishing declarations and JavaScript, which `bun check` does not emit.
 Use `bun run check` for the full typecheck/lint gate.
 
+Run only the relevant files and affected consumers with `bun test test/<file>.test.ts`.
+Use direct `bun test` for file filters: the aggregate runner does not forward them.
+Leave full suites to CI unless shared changes, unexplained focused failures, or an
+explicit request justify a broader run. Docs-only edits need no runtime suite.
+Root `bun run test:ts` (TypeScript) and `bun run test` (TypeScript plus the Rust task)
+use CPU-bounded chunk parallelism,
+as does this package's `bun run test`, even when an agent shell exports `CI=true`.
+Set `OMP_TEST_CONCURRENCY=2` to lower the process budget, or `=1` for serial chunks.
+Do not run several full suites simultaneously: their independent worker pools
+compete for the same CPU and memory.
+
+The CI bucket commands retain their conservative default. Pass `--local` to
+`scripts/ci-test-ts.ts` to use local scheduling for a bucket, or set an explicit
+`OMP_TEST_CONCURRENCY` in CI. `--dry-run` prints the selected commands without
+running them. The runner clears inherited `OMP_STRICT_SESSION_LOCK`; a test of
+strict session ownership must enable that policy in its own fixture.
+
 After changing export HTML/CSS/JS, web themes, or the shared tool/trace renderers, run
 `bun run gen:export-viewer` and include `src/export/html/viewer.generated.json`
 with the change. The generated JS lives in ignored `export-assets/`; CI verifies
