@@ -966,6 +966,11 @@ export function getAgentDbPath(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, "agent.db", "data");
 }
 
+/** Get the path to spend.db (SQLite ledger of per-provider budget spend). */
+export function getSpendDbPath(agentDir?: string): string {
+	return dirs.agentSubdir(agentDir, "spend.db", "data");
+}
+
 /** Get the last-seen-changelog-version marker file (~/.omp/agent/last-changelog-version). */
 export function getLastChangelogVersionPath(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, "last-changelog-version", "state");

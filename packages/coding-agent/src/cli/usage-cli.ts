@@ -29,6 +29,7 @@ import { formatProviderName } from "@oh-my-pi/pi-tui/chrome/format";
 import { peakBuckets, renderSparkline } from "@oh-my-pi/pi-tui/components/sparkline";
 import { formatDuration, formatNumber, getProjectDir, sanitizeText } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
+import { spendBudgetReports } from "@oh-my-pi/pi-ai/spend-budget";
 import { ModelRegistry } from "../config/model-registry";
 import { Settings } from "../config/settings";
 import { discoverAuthStorage, loadCliExtensionProviders } from "../sdk";
@@ -1642,10 +1643,15 @@ export async function runUsageCommand(cmd: UsageCommandArgs): Promise<void> {
 			getAccountPolicy: (provider, identity) => authStorage.oauth.policy(provider, identity),
 		};
 		const modelRegistry = await loadUsageSources(cmd, settings, authStorage);
-		const reports =
-			(await authStorage.usage.reports({
+		const reports = [
+			...((await authStorage.usage.reports({
 				baseUrlResolver: provider => modelRegistry.getProviderBaseUrl(provider),
-			})) ?? [];
+				// Probe only the requested provider: `--provider` filters the output anyway.
+				...(cmd.provider ? { provider: cmd.provider } : {}),
+			})) ?? []),
+			// Budgeted providers (models.yml `budget`) report from the local spend ledger.
+			...spendBudgetReports(),
+		];
 		const storedAccounts = collectStoredAccounts(authStorage);
 		let accounts = selectReportableAccounts(
 			storedAccounts,

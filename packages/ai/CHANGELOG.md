@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Providers can be given a spend budget (`setProviderSpendBudgets`); every request to them is admitted against a cross-process ledger in `spend.db` and refused with `SpendBudgetExceededError` when its worst-case cost does not fit
+
 ## [18.18.4] - 2026-11-09
 
 ### Added

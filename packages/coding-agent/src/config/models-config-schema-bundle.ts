@@ -373,6 +373,20 @@ export const getModelsConfigSchemaBundle = once(() => {
 
 	const ProviderAuthSchema = type('"apiKey" | "none" | "oauth"');
 
+	const ProviderBudgetSchema = type({
+		limitUsd: "number >= 0",
+		"resetDay?": "number",
+		"reserveUsd?": "number >= 0",
+	}).narrow((value, ctx) => {
+		if (
+			value.resetDay !== undefined &&
+			!(Number.isInteger(value.resetDay) && value.resetDay >= 1 && value.resetDay <= 31)
+		) {
+			return ctx.mustBe("resetDay an integer from 1 to 31");
+		}
+		return true;
+	});
+
 	const ProviderConfigSchema = type({
 		"baseUrl?": "string",
 		"apiKey?": "string",
@@ -386,6 +400,12 @@ export const getModelsConfigSchemaBundle = once(() => {
 		"models?": ModelDefinitionSchema.array(),
 		"modelOverrides?": { "[string]": ModelOverrideSchema },
 		"disableStrictTools?": "boolean",
+		/**
+		 * Hard spend budget for every request to this provider, metered in the
+		 * local `spend.db` ledger. Requests whose worst-case cost does not fit
+		 * the remaining budget are refused before they are sent.
+		 */
+		"budget?": ProviderBudgetSchema,
 		/**
 		 * Amazon Bedrock Guardrail id or ARN attached to every Converse request under
 		 * this provider. Required by accounts that gate `bedrock:InvokeModel*` on the
@@ -429,6 +449,7 @@ export const getModelsConfigSchemaBundle = once(() => {
 		ModelOverrideSchema,
 		ProviderDiscoverySchema,
 		ProviderAuthSchema,
+		ProviderBudgetSchema,
 		ModelsConfigSchema,
 	};
 });

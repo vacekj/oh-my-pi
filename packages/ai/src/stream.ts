@@ -62,6 +62,7 @@ import {
 	streamOpenAIResponses,
 } from "./providers/register-builtins";
 import { getProviderDefinition } from "./registry";
+import { admitSpend, carrySpendAdmission } from "./spend-budget";
 import type {
 	Api,
 	AssistantMessage,
@@ -856,6 +857,21 @@ function streamDispatch<TApi extends Api>(
 	options: OptionsForApi<TApi> | undefined,
 	limited: boolean,
 ): AssistantMessageEventStream {
+	const admission = admitSpend(model, context, options);
+	try {
+		return admission.meter(streamDispatchUnmetered(model, context, admission.options, limited));
+	} catch (error) {
+		admission.release();
+		throw error;
+	}
+}
+
+function streamDispatchUnmetered<TApi extends Api>(
+	model: Model<TApi>,
+	context: Context,
+	options: OptionsForApi<TApi> | undefined,
+	limited: boolean,
+): AssistantMessageEventStream {
 	// A provider turned off in its auth rules is never called, even with a key passed in directly.
 	assertProviderEnabled(model.provider);
 	const requestOptions = withSupportedSamplingParams(
@@ -1218,6 +1234,20 @@ function forwardBedrockUserAgent(
 }
 
 function streamSimpleRequest<TApi extends Api>(
+	model: Model<TApi>,
+	context: Context,
+	options?: SimpleStreamOptions,
+): AssistantMessageEventStream {
+	const admission = admitSpend(model, context, options);
+	try {
+		return admission.meter(streamSimpleRequestUnmetered(model, context, admission.options));
+	} catch (error) {
+		admission.release();
+		throw error;
+	}
+}
+
+function streamSimpleRequestUnmetered<TApi extends Api>(
 	model: Model<TApi>,
 	context: Context,
 	options?: SimpleStreamOptions,
@@ -1789,6 +1819,16 @@ function assertExplicitOpenAIResponsesPromptCacheSupport<TApi extends Api>(
 }
 
 function mapOptionsForApi<TApi extends Api>(
+	model: Model<TApi>,
+	rawOptions?: SimpleStreamOptions,
+	apiKey?: string,
+): OptionsForApi<TApi> {
+	// The mapped options start a nested `stream()` dispatch of the same request,
+	// which must not reserve the spend budget a second time.
+	return carrySpendAdmission(rawOptions, mapOptionsForApiFresh(model, rawOptions, apiKey));
+}
+
+function mapOptionsForApiFresh<TApi extends Api>(
 	model: Model<TApi>,
 	rawOptions?: SimpleStreamOptions,
 	apiKey?: string,

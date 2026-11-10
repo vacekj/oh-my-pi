@@ -1,3 +1,4 @@
+import { type ProviderSpendBudget, setProviderSpendBudgets } from "@oh-my-pi/pi-ai/spend-budget";
 import * as path from "node:path";
 import type { ApiKeyResolver, FetchImpl, ResolvedApiKey, UsageProvider } from "@oh-my-pi/pi-ai";
 import { type AuthApiKeyOptions, type AuthPeekOptions, oauthAccountKey } from "@oh-my-pi/pi-ai/auth-storage";
@@ -2048,6 +2049,7 @@ export class ModelRegistry {
 				found: true,
 			};
 		} else if (status === "not-found") {
+			setProviderSpendBudgets(new Map());
 			return {
 				models: [],
 				overrides: new Map(),
@@ -2073,6 +2075,19 @@ export class ModelRegistry {
 		const discoverableProviders: DiscoveryProviderConfig[] = [];
 		const providerEntries = Object.entries(value.providers ?? {});
 		const configuredProviders = new Set(Object.keys(value.providers ?? {}));
+		// Budgets change only on a successful load: a broken edit keeps the last
+		// budgets in force rather than leaving a capped provider unmetered.
+		const spendBudgets = new Map<string, ProviderSpendBudget>();
+		for (const [providerName, providerConfig] of providerEntries) {
+			const budget = providerConfig.budget;
+			if (!budget) continue;
+			spendBudgets.set(providerName, {
+				limitUsd: budget.limitUsd,
+				resetDay: budget.resetDay ?? 1,
+				reserveUsd: budget.reserveUsd ?? 1,
+			});
+		}
+		setProviderSpendBudgets(spendBudgets);
 		for (const [providerName, providerConfig] of providerEntries) {
 			const commandConfigs = new Set<string>();
 			this.#collectCommandConfigValues(commandConfigs, providerConfig.apiKey, providerConfig.headers);

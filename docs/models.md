@@ -503,6 +503,52 @@ retention tier actually used is never warmed; custom models and `modelOverrides`
 with `promptCache` once the backing cache behavior is known. See `providers.cacheWarming` in
 [Settings](./settings.md).
 
+## Spend budgets (`budget`)
+
+A provider can carry a hard spend budget. omp meters every request to it in
+`spend.db` (next to `agent.db`) and refuses a request, before sending it, when
+its worst-case cost does not fit what is left of the cycle:
+
+```yaml
+providers:
+   claude-credits:
+      baseUrl: https://api.anthropic.com
+      apiKey: "!op read op://Private/Claude Console/credential"
+      api: anthropic-messages
+      auth: apiKey
+      budget:
+         limitUsd: 100 # spend allowed per cycle
+         resetDay: 14 # day of the month the cycle restarts (local time, clamped to short months); default 1
+         reserveUsd: 1 # kept unspent as a margin for spend the estimate misses; default 1
+      models:
+         - id: claude-opus-5-5
+           name: Claude Opus 5.5 (API credits)
+```
+
+- **Admission.** A request's worst case prices every prompt token as a 1-hour
+  cache write (the dearest input rate) and the model's full output cap. omp
+  sends the request only when the cycle's settled spend, plus the worst case of
+  every request still in flight, plus this request's worst case stays within
+  `limitUsd - reserveUsd`. Admission and the reservation are one SQLite
+  transaction, so parallel sessions, subagents and omp processes cannot jointly
+  overshoot. Near the end of a budget the last few dollars are therefore not
+  usable by a large request.
+- **Settlement.** A finished request replaces its reservation with the cost
+  omp computed from the provider's reported usage. A stream that fails without
+  a final message keeps its worst case.
+- **Coverage.** The gate sits in `stream()`/`streamSimple()`, so it covers the
+  main loop, subagents, compaction, titles and every other side request.
+- **Scope.** The ledger sees only spend made by omp on this machine. Spend from
+  other tools on the same API organization, server-tool fees (web search) and
+  price changes omp's catalog does not know about are not counted; size
+  `reserveUsd` for them.
+- **Display.** `omp usage` (and `omp usage --json --provider <id>`) reports the
+  cycle's spend as a `usd` limit with its reset time.
+
+A refused request fails with `SpendBudgetExceededError`, naming the spend,
+the limit and the reset date. Removing or breaking `models.yml` does not lift a
+budget mid-process: a load that fails validation keeps the last budgets.
+
 ## Usage costs and time-based pricing
 
 OMP estimates token costs from the selected provider/model's catalog pricing, preferring server-reported monetary costs when available. Completed messages retain their recorded costs: crossing a pricing boundary, switching models, or reopening a session does not reprice accumulated usage.

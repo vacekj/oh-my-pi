@@ -4,6 +4,7 @@
 
 ### Added
 
+- A provider in `models.yml` can carry a hard monthly `budget` (`limitUsd`, `resetDay`, `reserveUsd`), such as the API credits included with a Claude Max plan: a request whose worst-case cost would exceed what is left is refused before it is sent, and `omp usage` shows the cycle's spend against the limit
 - Extensions can ask the operator before an interactive quit, or cancel it, with `session_before_shutdown`; a further `/exit` or Ctrl+D skips the pending prompts and closes ([#18424](https://github.com/can1357/oh-my-pi/pull/18424) by [@aw1cks](https://github.com/aw1cks))
 
 ### Fixed
