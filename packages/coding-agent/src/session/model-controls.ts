@@ -61,6 +61,8 @@ import { cfgDisabledProviders, cfgEnabledModels } from "../config/model-settings
 export interface ModelControlsHost {
 	agent: Agent;
 	settings: Settings;
+	/** Session-local role assignments; falls back to {@link settings} for everything else. */
+	modelRoleSettings: Settings;
 	modelRegistry: ModelRegistry;
 	sessionManager: SessionManager;
 	providerSessionState: Map<string, ProviderSessionState>;
@@ -202,12 +204,21 @@ export class ModelControls {
 		this.#serviceTierByFamily = tiers;
 	}
 	resolveRoleModel(role: string): Model | undefined {
-		return resolveRoleModelFull(this.#host.settings, role, this.#host.modelRegistry.getAvailable(), this.#model)
-			.model;
+		return resolveRoleModelFull(
+			this.#host.modelRoleSettings,
+			role,
+			this.#host.modelRegistry.getAvailable(),
+			this.#model,
+		).model;
 	}
 
 	resolveRoleModelWithThinking(role: string): ResolvedModelRoleValue {
-		return resolveRoleModelFull(this.#host.settings, role, this.#host.modelRegistry.getAvailable(), this.#model);
+		return resolveRoleModelFull(
+			this.#host.modelRoleSettings,
+			role,
+			this.#host.modelRegistry.getAvailable(),
+			this.#model,
+		);
 	}
 
 	resolveTemporaryModelThinkingLevel(model: Model): ConfiguredThinkingLevel | undefined {
@@ -215,12 +226,12 @@ export class ModelControls {
 		if (availableModels.length === 0) return undefined;
 
 		const matchPreferences = getModelMatchPreferences(this.#host.settings);
-		for (const role of getKnownRoleIds(this.#host.settings)) {
-			const roleValue = this.#host.settings.getModelRole(role);
+		for (const role of getKnownRoleIds(this.#host.modelRoleSettings)) {
+			const roleValue = this.#host.modelRoleSettings.getModelRole(role);
 			if (!roleValue) continue;
 
 			const resolved = resolveModelRoleValue(roleValue, availableModels, {
-				settings: this.#host.settings,
+				settings: this.#host.modelRoleSettings,
 				matchPreferences,
 			});
 			if (!resolved.explicitThinkingLevel || resolved.thinkingLevel === undefined || !resolved.model) continue;
@@ -346,12 +357,12 @@ export class ModelControls {
 		for (const role of roleOrder) {
 			const roleModelStr =
 				role === "default"
-					? (this.#host.settings.getModelRole("default") ?? `${currentModel.provider}/${currentModel.id}`)
-					: this.#host.settings.getModelRole(role);
+					? (this.#host.modelRoleSettings.getModelRole("default") ?? `${currentModel.provider}/${currentModel.id}`)
+					: this.#host.modelRoleSettings.getModelRole(role);
 			if (!roleModelStr) continue;
 
 			const resolved = resolveModelRoleValue(roleModelStr, availableModels, {
-				settings: this.#host.settings,
+				settings: this.#host.modelRoleSettings,
 				matchPreferences,
 			});
 			if (!resolved.model) continue;

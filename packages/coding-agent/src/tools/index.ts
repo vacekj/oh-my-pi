@@ -457,6 +457,12 @@ export interface ToolSession {
 	localProtocolOptions?: LocalProtocolOptions;
 	/** Settings instance for passing to subagents */
 	settings: Settings;
+	/**
+	 * Session-local role assignments to hand to subagents, so their `modelRoles`
+	 * inherit this session's overrides without touching shared settings.
+	 * Defaults to {@link settings}.
+	 */
+	modelRoleSettings?: Settings;
 	/** Plan mode state (if active) */
 	getPlanModeState?: () => PlanModeState | undefined;
 	/** Path of the session's active plan reference (e.g. `local://<title>.md`); defaults to `local://PLAN.md`. */

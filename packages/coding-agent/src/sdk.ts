@@ -165,7 +165,7 @@ import { MCP_CONNECTION_STATUS_EVENT_CHANNEL, type McpConnectionStatusEvent } fr
 import { resolveMCPToolAlias } from "./mcp/tool-bridge";
 import { createSessionMemoryRuntimeContext, resolveMemoryBackend } from "./memory-backend";
 import { cfgMemoryBackend } from "./memory-backend/settings";
-import { getSessionPromptFilter } from "./session/prompt-sections";
+import { getSessionPromptFilter, getSessionPromptOverrides } from "./session/prompt-sections";
 import { type AppendPromptPart, SystemPromptManifestLog } from "./system-prompt-sources";
 import { MEMORY_BACKEND_TOOL_NAMES } from "./memory-backend/tool-names";
 import type { MnemopiSessionState } from "./mnemopi/state";
@@ -2730,6 +2730,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				}
 			},
 			getArtifactManager: () => sessionManager.getArtifactManager(),
+			// Task and other subagent-spawning tools inherit this session's role
+			// assignments; the overlay reads through to `settings` for everything else.
+			get modelRoleSettings() {
+				return session ? session.modelRoleSettings : settings;
+			},
 			settings,
 			authStorage,
 			modelRegistry,
@@ -4169,10 +4174,15 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// its own telemetry handle, so its usage stays out of the run summary.
 			// The first requests can start before `agent` is constructed; they use
 			// the telemetry config and session id the agent is constructed with.
-			compress: createSkillDescriptionCompressor(modelRegistry, settings, undefined, () =>
-				agent
-					? resolveTelemetry(agent.telemetry, agent.sessionId)
-					: resolveTelemetry(options.telemetry, providerSessionId),
+			compress: createSkillDescriptionCompressor(
+				modelRegistry,
+				settings,
+				undefined,
+				() =>
+					agent
+						? resolveTelemetry(agent.telemetry, agent.sessionId)
+						: resolveTelemetry(options.telemetry, providerSessionId),
+				() => (session ? session.modelRoleSettings : settings),
 			),
 		});
 		// Instructions from MCP servers the host connects outside `mcpManager`
@@ -4460,6 +4470,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				reactions: agentKind === "main" && options.hasUI === true && cfgTuiReactions.get(settings),
 				activeRepoContext,
 				promptFilter: agentKind === "main" ? getSessionPromptFilter() : undefined,
+				promptOverrides: agentKind === "main" ? getSessionPromptOverrides() : undefined,
 			});
 
 			if (typeof options.systemPrompt !== "function") {

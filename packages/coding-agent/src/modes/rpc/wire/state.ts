@@ -107,6 +107,10 @@ export const stateDefs = {
 		},
 		"Where a template section is declared.",
 	),
+	PromptSectionReplacement: doc(
+		{ kind: "'session'", setting: "'promptOverrides'" },
+		"Why a section's emitted text is not the declaration's: a session text replacement (`promptOverrides`).",
+	),
 	PromptSectionRef: doc(
 		{
 			id: "string",
@@ -115,6 +119,10 @@ export const stateDefs = {
 			kind: "PromptSectionKind",
 			origin: "PromptSectionOrigin | null",
 			"source?": "SystemPromptSourceInfo",
+			"replacement?": doc(
+				"PromptSectionReplacement",
+				"The emitted text is a session replacement; `origin`/`source` still describe the declaration.",
+			),
 		},
 		"A section without its place in the prompt.",
 	),
@@ -139,6 +147,10 @@ export const stateDefs = {
 				"SystemPromptGate[]",
 				"The template conditionals directly around the section that held for it to render, with the setting id when one exists.",
 			),
+			"replacement?": doc(
+				"PromptSectionReplacement",
+				"The emitted text is a session replacement; `origin`/`source` still describe the declaration.",
+			),
 		},
 		"A template section or an input, located in the prompt. Children lie inside their parent; top-level sections tile every block.",
 	),
@@ -159,6 +171,10 @@ export const stateDefs = {
 			),
 			filter: doc("PromptFilter", "The filter the build applied."),
 			excluded: doc("PromptSectionRef[]", "Sections the filter removed (roots only)."),
+			"overrides?": doc(
+				"Record<string, string>",
+				"Session text replacements this build applied (section id -> replacement text); absent when none.",
+			),
 		},
 		"Which section or input produced which text of `systemPrompt`.",
 	),
@@ -227,6 +243,14 @@ export const stateDefs = {
 	),
 	SessionState: {
 		"model?": "ModelInfo",
+		"modelRoles?": doc(
+			"Record<string, string>",
+			"Effective role selectors: session-local assignments over configuration.",
+		),
+		"modelRoleOverrides?": doc(
+			"Record<string, string>",
+			"This session's local role assignments (empty when none).",
+		),
 		"thinkingLevel?": "ThinkingLevel",
 		isStreaming: absentAs("boolean", false),
 		isCompacting: absentAs("boolean", false),

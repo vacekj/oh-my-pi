@@ -291,6 +291,8 @@ describe("RpcInputDispatcher", () => {
 					command: "get_state",
 					success: true,
 					data: {
+						modelRoles: {},
+						modelRoleOverrides: {},
 						thinkingLevel: undefined,
 						isStreaming: false,
 						isCompacting: false,

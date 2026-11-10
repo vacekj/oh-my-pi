@@ -662,6 +662,13 @@ class PromptSectionOrigin:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class PromptSectionReplacement:
+    """Why a section's emitted text is not the declaration's: a session text replacement (`promptOverrides`)."""
+    kind: Literal["session"] = "session"
+    setting: Literal["promptOverrides"] = "promptOverrides"
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class PromptSectionRef:
     """A section without its place in the prompt."""
     id: str
@@ -670,6 +677,8 @@ class PromptSectionRef:
     kind: PromptSectionKind
     origin: PromptSectionOrigin | None
     source: SystemPromptSourceInfo | None = None
+    replacement: PromptSectionReplacement | None = None
+    """The emitted text is a session replacement; `origin`/`source` still describe the declaration."""
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -692,6 +701,8 @@ class PromptSection:
     """The template conditionals directly around the section that held for it to render, with the setting id when one exists."""
     source: SystemPromptSourceInfo | None = None
     """Inputs only: the same info as the matching `sources` entry."""
+    replacement: PromptSectionReplacement | None = None
+    """The emitted text is a session replacement; `origin`/`source` still describe the declaration."""
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -712,6 +723,8 @@ class SystemPromptSources:
     """The filter the build applied."""
     excluded: tuple[PromptSectionRef, ...]
     """Sections the filter removed (roots only)."""
+    overrides: dict[str, str] | None = None
+    """Session text replacements this build applied (section id -> replacement text); absent when none."""
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -784,6 +797,10 @@ class UsageLimitWrapUp:
 class SessionState:
     session_id: str
     model: ModelInfo | None = None
+    model_roles: dict[str, str] | None = None
+    """Effective role selectors: session-local assignments over configuration."""
+    model_role_overrides: dict[str, str] | None = None
+    """This session's local role assignments (empty when none)."""
     thinking_level: ThinkingLevel | None = None
     is_streaming: bool = False
     is_compacting: bool = False
@@ -2149,6 +2166,14 @@ def parse_prompt_section_origin(value: object, path: str = "PromptSectionOrigin"
     )
 
 
+def parse_prompt_section_replacement(value: object, path: str = "PromptSectionReplacement") -> PromptSectionReplacement:
+    payload = expect_object(value, path)
+    required(payload, "kind", cast('Decoder[Literal["session"]]', literal(frozenset({"session"}))), path)
+    required(payload, "setting", cast('Decoder[Literal["promptOverrides"]]', literal(frozenset({"promptOverrides"}))), path)
+    return PromptSectionReplacement(
+    )
+
+
 def parse_prompt_section_ref(value: object, path: str = "PromptSectionRef") -> PromptSectionRef:
     payload = expect_object(value, path)
     return PromptSectionRef(
@@ -2158,6 +2183,7 @@ def parse_prompt_section_ref(value: object, path: str = "PromptSectionRef") -> P
         kind=required(payload, "kind", _decode_prompt_section_kind, path),
         origin=required(payload, "origin", nullable(parse_prompt_section_origin), path),
         source=optional(payload, "source", parse_system_prompt_source_info, path),
+        replacement=optional(payload, "replacement", parse_prompt_section_replacement, path),
     )
 
 
@@ -2174,6 +2200,7 @@ def parse_prompt_section(value: object, path: str = "PromptSection") -> PromptSe
         origin=required(payload, "origin", nullable(parse_prompt_section_origin), path),
         gates=required(payload, "gates", array(parse_system_prompt_gate), path),
         source=optional(payload, "source", parse_system_prompt_source_info, path),
+        replacement=optional(payload, "replacement", parse_prompt_section_replacement, path),
     )
 
 
@@ -2189,6 +2216,7 @@ def parse_system_prompt_sources(value: object, path: str = "SystemPromptSources"
         sections=required(payload, "sections", array(parse_prompt_section), path),
         filter=required(payload, "filter", parse_prompt_filter, path),
         excluded=required(payload, "excluded", array(parse_prompt_section_ref), path),
+        overrides=optional(payload, "overrides", record(decode_str), path),
     )
 
 
@@ -2266,6 +2294,8 @@ def parse_session_state(value: object, path: str = "SessionState") -> SessionSta
     return SessionState(
         session_id=required(payload, "sessionId", decode_str, path),
         model=optional(payload, "model", parse_model_info, path),
+        model_roles=optional(payload, "modelRoles", record(decode_str), path),
+        model_role_overrides=optional(payload, "modelRoleOverrides", record(decode_str), path),
         thinking_level=optional(payload, "thinkingLevel", _decode_thinking_level, path),
         is_streaming=defaulted(payload, "isStreaming", decode_bool, path, False),
         is_compacting=defaulted(payload, "isCompacting", decode_bool, path, False),
@@ -3614,6 +3644,18 @@ class WireClient:
         params: dict[str, object] = {}
         return parse_session_state(self._command("get_state", params), "get_state")
 
+    def set_prompt_overrides(self, overrides: dict[str, str]) -> None:
+        """Replace the session's system prompt section text overrides, keyed by section id. The prompt is rebuilt, so the next `get_state` reflects them. An empty string is a deliberate empty replacement; an empty map restores the declared text."""
+        params: dict[str, object] = {}
+        params["overrides"] = overrides
+        self._command("set_prompt_overrides", params)
+
+    def set_model_roles(self, roles: dict[str, str]) -> None:
+        """Replace the session-local model role assignments (role -> selector, including an optional reasoning suffix). An empty map clears them. Nothing is written to shared configuration and other sessions are unaffected."""
+        params: dict[str, object] = {}
+        params["roles"] = roles
+        self._command("set_model_roles", params)
+
     def set_mcp_overrides(self, overrides: dict[str, bool]) -> None:
         """Set process-local MCP switches without changing shared configuration."""
         params: dict[str, object] = {}
@@ -4351,6 +4393,7 @@ __all__ = [
     "PromptSectionKind",
     "PromptSectionOrigin",
     "PromptSectionRef",
+    "PromptSectionReplacement",
     "PromptStatus",
     "PythonExecutionMessage",
     "QueueMode",
@@ -4544,6 +4587,7 @@ __all__ = [
     "parse_prompt_section_input",
     "parse_prompt_section_origin",
     "parse_prompt_section_ref",
+    "parse_prompt_section_replacement",
     "parse_python_execution_message",
     "parse_queue_update_event",
     "parse_queued_messages_state",

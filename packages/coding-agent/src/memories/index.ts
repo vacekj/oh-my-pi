@@ -1372,11 +1372,12 @@ async function resolveMemoryModel(options: {
 	fallbackRole: string;
 }): Promise<Model | undefined> {
 	const { modelRegistry, session, fallbackRole } = options;
-	const requestedModel = session.settings.getModelRole(fallbackRole) || session.settings.getModelRole("default");
+	const settings = session.modelRoleSettings;
+	const requestedModel = settings.getModelRole(fallbackRole) || settings.getModelRole("default");
 	if (requestedModel) {
 		const resolved = resolveModelRoleValue(requestedModel, modelRegistry.getAll(), {
-			settings: session.settings,
-			matchPreferences: getModelMatchPreferences(session.settings),
+			settings,
+			matchPreferences: getModelMatchPreferences(settings),
 		});
 		if (resolved.model) return resolved.model;
 	}

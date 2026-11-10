@@ -2280,12 +2280,34 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				await session.setPromptFilter(filter);
 				return success(id, command.type);
 			}
+			case "set_prompt_overrides": {
+				if (session.isCompacting || !isSessionSettled(session, goalTurnScheduled))
+					return error(id, command.type, "Wait for the agent to finish", "session_busy");
+				try {
+					await session.setPromptOverrides(command.overrides);
+				} catch (e) {
+					return error(id, command.type, e instanceof Error ? e.message : String(e));
+				}
+				return success(id, command.type);
+			}
+			case "set_model_roles": {
+				if (session.isCompacting || !isSessionSettled(session, goalTurnScheduled))
+					return error(id, command.type, "Wait for the agent to finish", "session_busy");
+				try {
+					session.setModelRoles(command.roles);
+				} catch (e) {
+					return error(id, command.type, e instanceof Error ? e.message : String(e));
+				}
+				return success(id, command.type);
+			}
 			case "get_state": {
 				// A goal exit triggered by the last turn restores tools asynchronously; report after it.
 				await goalController.settled();
 				const queuedMessages = session.getQueuedMessages();
 				const state: RpcSessionState = {
 					model: session.model,
+					modelRoles: session.modelRoles,
+					modelRoleOverrides: session.modelRoleOverrides,
 					thinkingLevel: session.thinkingLevel,
 					isStreaming: session.isStreaming,
 					isCompacting: session.isCompacting,

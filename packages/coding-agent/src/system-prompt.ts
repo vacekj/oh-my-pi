@@ -571,6 +571,13 @@ export interface BuildSystemPromptOptions {
 	 * filter removes are dropped from the template data. Default: keep everything.
 	 */
 	promptFilter?: PromptFilter;
+	/**
+	 * Session text replacements by section id, applied to template sections and
+	 * input sections alike before the manifest is located. An empty string is a
+	 * deliberate empty replacement. A filter still decides inclusion, so an
+	 * override never resurrects a removed section.
+	 */
+	promptOverrides?: Readonly<Record<string, string>>;
 	/** Inline full tool descriptors in the system prompt. Default: false */
 	inlineToolDescriptors?: boolean;
 	/**
@@ -757,6 +764,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		writeTransportOnly = false,
 		subagent = false,
 		activeRepoContext: providedActiveRepoContext,
+		promptOverrides = {},
 	} = options;
 	const inlineToolDescriptors = providedInlineToolDescriptors ?? false;
 	const resolvedCwd = cwd ?? getProjectDir();
@@ -1329,12 +1337,18 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	});
 	const renderProjectBlock = (marker: SourceMarker, data: ReturnType<typeof templateData>, tracking: boolean) =>
 		renderTemplate(marker, projectPromptTemplate, data, tracking, projectBlock());
+	const overrides = Object.keys(promptOverrides).length > 0 ? promptOverrides : undefined;
 	const preludeGuidance = evalPreludes.flatMap(prelude => {
 		const guidance = prelude.guidance?.trim();
 		return guidance ? [{ name: prelude.name, guidance }] : [];
 	});
+	const preludeText = ({ name, guidance }: { name: string; guidance: string }): string => {
+		const id = `eval-prelude:${name}`;
+		return overrides && Object.hasOwn(overrides, id) ? overrides[id] : guidance;
+	};
 
-	// A filter is resolved against the sections an unfiltered build renders.
+	// A filter is resolved against the sections an unfiltered build renders, with
+	// declarations intact: a replacement must not change what the filter decides.
 	const filtered = filter.mode === "only" || filter.ids.length > 0;
 	let dropped: (id: string) => boolean = () => false;
 	let excluded: PromptSectionRef[] = [];
@@ -1353,17 +1367,26 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 			...markedSections(renderProjectBlock(unfiltered, unfilteredData, true), unfiltered, projectBlock()),
 		];
 		dropped = promptFilterDrops(filter, tree);
-		excluded = droppedRoots(tree, dropped);
+		excluded = droppedRoots(tree, dropped).map(ref =>
+			overrides && Object.hasOwn(overrides, ref.id)
+				? { ...ref, replacement: { kind: "session" as const, setting: "promptOverrides" as const } }
+				: ref,
+		);
 	}
 
-	const plain = SourceMarker.plain({ ...(filtered ? { dropped } : {}), gateSettings });
+	const plain = SourceMarker.plain({ ...(filtered ? { dropped } : {}), gateSettings, overrides });
 	const data = templateData(plain);
 	const rendered = renderTemplateBlock(plain, data, false);
 	const builtBlocks: Array<{ text: string; kind: "template" | "prelude" | "project"; name?: string }> = [];
-	// An unfiltered prompt always has its template block; a filter may remove all of it.
-	if (rendered.trim() || !filtered) builtBlocks.push({ text: rendered, kind: "template" });
-	for (const { name, guidance } of preludeGuidance) {
-		if (!dropped(`eval-prelude:${name}`)) builtBlocks.push({ text: guidance, kind: "prelude", name });
+	// An unfiltered prompt always has its template block; a filter may remove all
+	// of it. A kept empty root with a replacement still needs its block so the
+	// zero-width section stays reported for Reset to source.
+	const keptEmptyRoot =
+		overrides !== undefined && Object.hasOwn(overrides, "template:root") && !dropped("template:root");
+	if (rendered.trim() || !filtered || keptEmptyRoot) builtBlocks.push({ text: rendered, kind: "template" });
+	for (const prelude of preludeGuidance) {
+		if (!dropped(`eval-prelude:${prelude.name}`))
+			builtBlocks.push({ text: preludeText(prelude), kind: "prelude", name: prelude.name });
 	}
 	// Working-directory content (context files with their paths, workspace
 	// tree/roots, active repo) and session append text form one trailing
@@ -1376,17 +1399,22 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 
 	let manifest: SystemPromptManifest | undefined;
 	try {
-		const tracker = SourceMarker.tracking({ ...(filtered ? { dropped } : {}), gateSettings });
+		const tracker = SourceMarker.tracking({ ...(filtered ? { dropped } : {}), gateSettings, overrides });
 		const marked = templateData(tracker);
 		const located: LocateResult = { sources: [], unlocated: [], sections: [] };
 		for (const [block, { text, kind, name }] of builtBlocks.entries()) {
 			if (kind === "prelude") {
 				const info = { id: `eval-prelude:${name}`, kind: "eval-prelude" as const, label: name ?? "" };
+				const replacement =
+					overrides && Object.hasOwn(overrides, info.id)
+						? { kind: "session" as const, setting: "promptOverrides" as const }
+						: undefined;
 				const section = wholeBlockSection(block, text, {
 					id: info.id,
 					title: info.label,
 					kind: info.kind,
 					source: info,
+					...(replacement ? { replacement } : {}),
 				});
 				if (section) {
 					located.sources.push({ ...info, block, start: section.start, end: section.end });
@@ -1440,6 +1468,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 			sections: located.sections,
 			filter,
 			excluded,
+			...(overrides ? { overrides: { ...overrides } } : {}),
 		};
 	} catch (error) {
 		// The manifest only describes the prompt; never fail a build over it.

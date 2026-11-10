@@ -8,6 +8,7 @@ import {
 	getSessionPromptBlocks,
 	getSessionPromptFilter,
 	parsePromptFilter,
+	parsePromptOverrides,
 	setSessionPromptFilter,
 	setSessionPromptSections,
 } from "@oh-my-pi/pi-coding-agent/session/prompt-sections";
@@ -122,4 +123,29 @@ test("a prompt filter must name a mode and string ids", () => {
 	expect(() => parsePromptFilter({ mode: "some", ids: [] })).toThrow("Invalid prompt filter");
 	expect(() => parsePromptFilter({ mode: "only", ids: [1] })).toThrow("Invalid prompt filter");
 	expect(getSessionPromptFilter()).toEqual({ mode: "exclude", ids: [] });
+});
+
+test("prompt overrides bound each replacement like a prompt section", () => {
+	expect(parsePromptOverrides({ "template:text with spaces": "" })).toEqual({ "template:text with spaces": "" });
+	expect(parsePromptOverrides({ "template:text": "x".repeat(50_000) })["template:text"]).toHaveLength(50_000);
+	expect(() => parsePromptOverrides({ "template:text": "x".repeat(50_001) })).toThrow(
+		"Prompt override is too large",
+	);
+
+	const four = Object.fromEntries(
+		Array.from({ length: 4 }, (_, index): [string, string] => [`template:text/${index + 1}`, "x".repeat(50_000)]),
+	);
+	expect(Object.keys(parsePromptOverrides(four))).toHaveLength(4);
+	const overTotal = Object.fromEntries(
+		Array.from({ length: 5 }, (_, index): [string, string] => [
+			`template:text/${index + 1}`,
+			"x".repeat(40_001),
+		]),
+	);
+	expect(() => parsePromptOverrides(overTotal)).toThrow("Prompt overrides are too large");
+
+	const tooMany = Object.fromEntries(
+		Array.from({ length: 257 }, (_, index): [string, string] => [`id-${index}`, ""]),
+	);
+	expect(() => parsePromptOverrides(tooMany)).toThrow("Use at most 256 prompt overrides");
 });

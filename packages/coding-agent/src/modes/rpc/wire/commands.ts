@@ -96,6 +96,16 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 		params: { filter: "PromptFilter" },
 	},
 	{
+		name: "set_prompt_overrides",
+		doc: "Replace the session's system prompt section text overrides, keyed by section id. The prompt is rebuilt, so the next `get_state` reflects them. An empty string is a deliberate empty replacement; an empty map restores the declared text.",
+		params: { overrides: "Record<string, string>" },
+	},
+	{
+		name: "set_model_roles",
+		doc: "Replace the session-local model role assignments (role -> selector, including an optional reasoning suffix). An empty map clears them. Nothing is written to shared configuration and other sessions are unaffected.",
+		params: { roles: "Record<string, string>" },
+	},
+	{
 		name: "set_mcp_overrides",
 		doc: "Set process-local MCP switches without changing shared configuration.",
 		params: { overrides: "Record<string, boolean>" },

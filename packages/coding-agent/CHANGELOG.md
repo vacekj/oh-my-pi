@@ -8,6 +8,9 @@
 - RPC `set_prompt_filter` and `OMP_SESSION_PROMPT_FILTER` keep or remove sections of the system prompt per session (`exclude` ids, or `only` ids; `only` with no ids gives an empty prompt, `only: ["tools"]` just the tool list). The prompt is rebuilt at once; tool schemas are unaffected.
 - RPC `set_prompt_sections` and `OMP_SESSION_PROMPT_SECTIONS` accept `{ title, text }` sections, reported as `session-section:<n>` under that title.
 - Template text outside every `{{#section}}` of a custom system prompt template is reported as `template:text`, `template:text/2`, … sections (the n-th stretch between sections keeps its id whatever the filter removes), and obeys `set_prompt_filter` like any other section. `systemPromptSources.excluded` also lists the session sections and the memory recall the filter removed.
+- RPC `set_prompt_overrides` and `OMP_SESSION_PROMPT_OVERRIDES` replace a section's text per session, for template sections and attributed inputs (context files, personality, the tool list, …). The prompt is rebuilt at once; an empty string is a deliberate empty section, and the filter still decides inclusion. Overridden sections keep their id, title and declaration (`origin`/`source`) and report `replacement: { kind: "session", setting: "promptOverrides" }`; the active map is `systemPromptSources.overrides`.
+- RPC `set_model_roles` and `OMP_SESSION_MODEL_ROLES` replace the session's role assignments (role → selector, reasoning suffix included) on a session-local settings overlay. Nothing is written to `config.yml`, other sessions are unaffected, and the main model does not switch; `get_state.modelRoles` reports effective selectors and `modelRoleOverrides` the local map.
+- Session role assignments reach spawned subagents, which inherit the parent's map without reading shared settings.
 
 ### Fixed
 

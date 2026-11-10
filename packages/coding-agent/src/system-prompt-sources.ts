@@ -90,6 +90,12 @@ export interface PromptSectionOrigin {
 	endLine: number;
 }
 
+/** Why a section's emitted text is not the declaration's: a session text replacement. */
+export interface PromptSectionReplacement {
+	kind: "session";
+	setting: "promptOverrides";
+}
+
 /** A template section or an input, located in `systemPrompt[block].slice(start, end)`. Children lie inside their parent. */
 export interface PromptSection {
 	/** Stable across rebuilds: `template:<path>`, `tools`, an input's source id, `session-section:<n>`, `memory-recall`. */
@@ -105,9 +111,14 @@ export interface PromptSection {
 	source?: SystemPromptSourceInfo;
 	/** The template conditionals directly around the section that held for it to render. */
 	gates: SystemPromptGate[];
+	/** The emitted text is a session replacement (`promptOverrides`), not the declared text. */
+	replacement?: PromptSectionReplacement;
 }
 
-export type PromptSectionRef = Pick<PromptSection, "id" | "parent" | "title" | "kind" | "origin" | "source">;
+export type PromptSectionRef = Pick<
+	PromptSection,
+	"id" | "parent" | "title" | "kind" | "origin" | "source" | "replacement"
+>;
 
 export interface SystemPromptManifest {
 	/** The template block 0 was rendered from. Text no source covers is that template's own. */
@@ -128,6 +139,8 @@ export interface SystemPromptManifest {
 	filter: PromptFilter;
 	/** Sections the filter removed (roots only). */
 	excluded: PromptSectionRef[];
+	/** Session text replacements this build applied (section id -> replacement text); absent when none. */
+	overrides?: Record<string, string>;
 }
 
 /** A generated block of the appended prompt (memory, MCP routes, …) and where it came from. */
@@ -161,7 +174,7 @@ function trimmedExtent(text: string): { start: number; end: number } | null {
 export function wholeBlockSection(
 	block: number,
 	text: string,
-	section: Pick<PromptSection, "id" | "title" | "kind" | "source">,
+	section: Pick<PromptSection, "id" | "title" | "kind" | "source" | "replacement">,
 ): PromptSection | null {
 	const extent = trimmedExtent(text);
 	return (
@@ -174,6 +187,7 @@ export function wholeBlockSection(
 			...extent,
 			origin: null,
 			...(section.source ? { source: section.source } : {}),
+			...(section.replacement ? { replacement: section.replacement } : {}),
 			gates: [],
 		}
 	);
@@ -266,6 +280,14 @@ export interface SourceMarkerOptions {
 	 * keeps a boundary marker for every section it renders so that text can be found.
 	 */
 	dropped?: (id: string) => boolean;
+	/**
+	 * Session text replacements by section, input, or template-text id, applied
+	 * to the rendered text before it is formatted or located. A parent's
+	 * replacement replaces its whole rendered body, so its children no longer
+	 * emit markers. A filter still wins: a removed section is never resurrected
+	 * by an override.
+	 */
+	overrides?: Readonly<Record<string, string>>;
 	/** Setting id by template data name, for the gates of sections. */
 	gateSettings?: Readonly<Record<string, string>>;
 }
@@ -279,14 +301,19 @@ export class SourceMarker {
 	readonly #entries: SystemPromptSourceInfo[] | undefined;
 	readonly #sections: SectionDecl[] | undefined;
 	readonly #options: SourceMarkerOptions;
+	readonly #overrides: Readonly<Record<string, string>> | undefined;
 	/** Conditionals around each open section, to tell its own gates from its parent's. */
 	readonly #open: number[] = [];
 	#file = "";
 	#declared = 0;
 
 	private constructor(tracking: boolean, options: SourceMarkerOptions) {
-		this.#entries = tracking ? [] : undefined;
-		this.#sections = tracking ? [] : undefined;
+		// Replacements need the same marker scaffolding to find the span they
+		// replace; a plain marker still strips the markers afterwards.
+		this.#overrides = options.overrides && Object.keys(options.overrides).length > 0 ? options.overrides : undefined;
+		const emitting = tracking || this.#overrides !== undefined;
+		this.#entries = emitting ? [] : undefined;
+		this.#sections = emitting ? [] : undefined;
 		this.#options = options;
 	}
 
@@ -305,6 +332,16 @@ export class SourceMarker {
 	/** Whether the filter removes this section or input. */
 	dropped(id: string): boolean {
 		return this.#options.dropped?.(id) ?? false;
+	}
+
+	/** Whether a session text replacement covers this section or input. */
+	hasOverride(id: string): boolean {
+		return this.#overrides !== undefined && Object.hasOwn(this.#overrides, id);
+	}
+
+	/** The declared-text replacement metadata for `id`, when the session overrides it. */
+	replacement(id: string): PromptSectionReplacement | undefined {
+		return this.hasOverride(id) ? { kind: "session", setting: "promptOverrides" } : undefined;
 	}
 
 	/** Starts rendering the template read from `file`: its sections report that origin. */
@@ -339,6 +376,12 @@ export class SourceMarker {
 	wrap(info: SystemPromptSourceInfo, text: string | undefined): string | undefined;
 	wrap(info: SystemPromptSourceInfo, text: string | undefined): string | undefined {
 		if (this.dropped(info.id)) return "";
+		const override =
+			this.#overrides && Object.hasOwn(this.#overrides, info.id) ? this.#overrides[info.id] : undefined;
+		if (override !== undefined) {
+			const [open, close] = this.around(info);
+			return open + override + close;
+		}
 		if (!text?.trim()) return text;
 		const [open, close] = this.around(info);
 		return open + text + close;
@@ -370,7 +413,11 @@ export class SourceMarker {
 		} finally {
 			this.#open.pop();
 		}
-		if (!stripMarkers(body).trim() || sections.length >= INDEX_LIMIT) {
+		const override = this.#overrides && Object.hasOwn(this.#overrides, id) ? this.#overrides[id] : undefined;
+		// A replacement is the section's whole body: children do not render, and
+		// an empty replacement still reports the section (a deliberate empty body).
+		if (override !== undefined) body = override;
+		if ((override === undefined && !stripMarkers(body).trim()) || sections.length >= INDEX_LIMIT) {
 			return SECTION_OPEN + UNNAMED + body + SECTION_CLOSE + UNNAMED;
 		}
 		const index = String.fromCharCode(INDEX_BASE + sections.length);
@@ -388,18 +435,27 @@ export class SourceMarker {
 	 * removes. That text is split by the sections around it: the n-th stretch
 	 * (counting the empty ones) is `textId` for the first and `<textId>/<n+1>`
 	 * after it, so an id means the same text whatever else the filter removes.
-	 * Needs the markers of a marker that tracks or filters. Text inside an
-	 * input value belongs to the stretch holding the input.
+	 * Applies a session replacement to the stretch whose id it names, and the
+	 * filter wins over one. Needs the markers of a marker that tracks, filters,
+	 * or applies overrides. Text inside an input value belongs to the stretch
+	 * holding the input.
 	 */
 	filterLooseText(marked: string, textId: string): string {
-		if (this.#options.dropped === undefined) return marked;
+		if (this.#options.dropped === undefined && this.#overrides === undefined) return marked;
 		const kept: string[] = [];
 		let depth = 0;
 		let stretch = 0;
 		let from = 0;
 		const keepStretch = (to: number) => {
 			const text = marked.slice(from, to);
-			kept.push(stripMarkers(text).trim() === "" || !this.dropped(looseTextId(textId, stretch)) ? text : "");
+			const id = looseTextId(textId, stretch);
+			if (this.dropped(id)) {
+				kept.push("");
+			} else if (this.hasOverride(id)) {
+				kept.push(this.#overrides![id]);
+			} else {
+				kept.push(text);
+			}
 		};
 		for (let i = 0; i < marked.length; i++) {
 			const code = marked.charCodeAt(i);
@@ -427,21 +483,82 @@ export class SourceMarker {
 	/**
 	 * A template that declares no sections is one section as a whole, so no text
 	 * of it goes unattributed and a filter can remove it. `text` is the render
-	 * before formatting, marked when tracking.
+	 * before formatting, marked when tracking. An override, even an empty one,
+	 * keeps the declaration and its marker so the section stays reported.
 	 */
 	wholeTemplate(id: string, title: string, lines: number, text: string): string {
 		if (this.dropped(id)) return "";
+		const overridden = this.hasOverride(id);
+		const replaced = overridden ? this.#overrides![id] : text;
 		const sections = this.#sections;
-		if (!sections || !stripMarkers(text).trim() || sections.length >= INDEX_LIMIT) return text;
+		if (!sections || sections.length >= INDEX_LIMIT || (!overridden && !stripMarkers(replaced).trim()))
+			return replaced;
 		const index = String.fromCharCode(INDEX_BASE + sections.length);
 		sections.push({ id, title, origin: { file: this.#file, startLine: 1, endLine: lines }, gates: [] });
-		return SECTION_OPEN + index + text + SECTION_CLOSE + index;
+		return SECTION_OPEN + index + replaced + SECTION_CLOSE + index;
+	}
+
+	/**
+	 * Replaces the rendered interior of every span a session override names.
+	 * Works for template sections and for inputs wrapped with {@link wrap} or
+	 * {@link around}: the whole span body is replaced, so a parent's replacement
+	 * drops its children, and markers stay in place for locating. A span the
+	 * filter removed has no named marker and is left alone, so a filter always
+	 * wins over an override.
+	 */
+	applyOverrides(marked: string): string {
+		const overrides = this.#overrides;
+		if (!overrides) return marked;
+		let result = "";
+		let i = 0;
+		while (i < marked.length) {
+			const code = marked.charCodeAt(i);
+			if (code < 0xfdd0 || code > 0xfdd3) {
+				result += marked[i];
+				i++;
+				continue;
+			}
+			const index = marked.charCodeAt(i + 1) - INDEX_BASE;
+			const section = code >= 0xfdd2;
+			const opening = code === 0xfdd0 || code === 0xfdd2;
+			const id = opening ? (section ? this.#sections?.[index]?.id : this.#entries?.[index]?.id) : undefined;
+			if (id === undefined || !Object.hasOwn(overrides, id)) {
+				result += marked.slice(i, i + 2);
+				i += 2;
+				continue;
+			}
+			const close = findCloseMarker(marked, i + 2, section);
+			result += marked.slice(i, i + 2) + overrides[id] + marked.slice(close, close + 2);
+			i = close + 2;
+		}
+		return result;
 	}
 
 	/** Declaration of the section whose marker carries `index`. */
 	sectionAt(index: number): SectionDecl | undefined {
 		return this.#sections?.[index];
 	}
+}
+
+/** Index of the closing marker matching a section or value opened before `from`, or `marked.length - 2`. */
+function findCloseMarker(marked: string, from: number, section: boolean): number {
+	const open = section ? 0xfdd2 : 0xfdd0;
+	const close = section ? 0xfdd3 : 0xfdd1;
+	let depth = 0;
+	for (let i = from; i < marked.length - 1; i++) {
+		const code = marked.charCodeAt(i);
+		if (code === open) {
+			depth++;
+			i++;
+		} else if (code === close) {
+			if (depth === 0) return i;
+			depth--;
+			i++;
+		} else if (code >= 0xfdd0 && code <= 0xfdd3) {
+			i++;
+		}
+	}
+	return marked.length - 2;
 }
 
 /** Text of a gate's value: a scalar as it is, `true` for anything the conditional merely found present. */
@@ -589,6 +706,7 @@ function describeSpan(
 		if (span.index === INDEX_LIMIT) return undefined;
 		const decl = marker.sectionAt(span.index);
 		if (!decl) throw new Error("Unknown section marker");
+		const replacement = marker.replacement(decl.id);
 		return {
 			id: decl.id,
 			parent: null,
@@ -596,11 +714,22 @@ function describeSpan(
 			kind: "template",
 			origin: decl.origin,
 			gates: decl.gates,
+			...(replacement ? { replacement } : {}),
 		};
 	}
 	const info = marker.entries[span.index];
 	if (!info) throw new Error("Unknown input marker");
-	return { id: info.id, parent: null, title: info.label, kind: info.kind, origin: null, source: info, gates: [] };
+	const replacement = marker.replacement(info.id);
+	return {
+		id: info.id,
+		parent: null,
+		title: info.label,
+		kind: info.kind,
+		origin: null,
+		source: info,
+		gates: [],
+		...(replacement ? { replacement } : {}),
+	};
 }
 
 /**
@@ -635,7 +764,11 @@ export function renderTemplate(
 	whole?: { id: string; title: string },
 ): string {
 	marker.beginTemplate(located.file);
-	const text = prompt.compile(template)(data);
+	const compiled = prompt.compile(template)(data);
+	// Session replacements land in the marked render itself, before the
+	// manifest is located and before formatting, so offsets describe the
+	// emitted text and an overridden parent has no child markers left.
+	const text = marker.applyOverrides(compiled);
 	const sectioned =
 		marker.declaredSections === 0 && whole
 			? marker.wholeTemplate(whole.id, whole.title, located.lines, text)
@@ -665,13 +798,16 @@ function placeSections(marked: string, marker: SourceMarker, template: LocatedTe
 	let stretch = 0;
 	const addLoose = (to: number) => {
 		if (to <= from) return;
+		const id = looseTextId(template.textId, stretch);
+		const replacement = marker.replacement(id);
 		loose.push({
 			ref: {
-				id: looseTextId(template.textId, stretch),
+				id,
 				parent: null,
 				title: "Template text",
 				kind: "template",
 				origin,
+				...(replacement ? { replacement } : {}),
 			},
 			gates: [],
 			parent: null,
@@ -690,9 +826,11 @@ function placeSections(marked: string, marker: SourceMarker, template: LocatedTe
 	const placed: PlacedSection[] = [...loose];
 	const placedAt = new Map<number, PlacedSection>();
 	spans.forEach((span, at) => {
-		if (span.nonWhitespaceEnd <= span.nonWhitespaceStart) return;
 		const described = describeSpan(span, marker);
 		if (!described) return;
+		// A deliberately empty replacement has no text but still reports the
+		// section, so a UI can label it and offer Reset to source.
+		if (span.nonWhitespaceEnd <= span.nonWhitespaceStart && !described.replacement) return;
 		let parent = span.parent;
 		while (parent >= 0 && !placedAt.has(parent)) parent = spans[parent].parent;
 		const { gates, ...ref } = described;
@@ -818,13 +956,17 @@ export function locateSources(
 ): void {
 	const { lines, nonWhitespace } = scanMarked(marked);
 	const positions = finalPositions(final, lines, nonWhitespace);
+	// A boundary at the end of the block (an empty replacement at the tail) maps
+	// past the last non-whitespace character.
+	const at = (count: number): number =>
+		count < nonWhitespace ? positions[count] : nonWhitespace > 0 ? positions[nonWhitespace - 1] + 1 : 0;
 	for (const { ref, gates, parent, start, end } of placeSections(marked, marker, template)) {
 		const section: PromptSection = {
 			...ref,
 			parent,
 			block,
-			start: positions[start],
-			end: positions[end - 1] + 1,
+			start: at(start),
+			end: end > start ? positions[end - 1] + 1 : at(start),
 			gates,
 		};
 		if (ref.source) {
