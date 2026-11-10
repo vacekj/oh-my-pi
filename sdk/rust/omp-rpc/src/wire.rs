@@ -3208,6 +3208,13 @@ pub struct PromptSectionOrigin {
 	pub end_line: i64,
 }
 
+/// Why a section's emitted text is not the declaration's: a session text replacement (`promptOverrides`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PromptSectionReplacement {
+	pub kind: LitSession,
+	pub setting: LitPromptOverrides,
+}
+
 /// A section without its place in the prompt.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PromptSectionRef {
@@ -3220,6 +3227,9 @@ pub struct PromptSectionRef {
 	pub origin: Option<PromptSectionOrigin>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub source: Option<SystemPromptSourceInfo>,
+	/// The emitted text is a session replacement; `origin`/`source` still describe the declaration.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub replacement: Option<PromptSectionReplacement>,
 }
 
 /// A template section or an input, located in the prompt. Children lie inside their parent; top-level sections tile every block.
@@ -3245,6 +3255,9 @@ pub struct PromptSection {
 	/// Inputs only: the same info as the matching `sources` entry.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub source: Option<SystemPromptSourceInfo>,
+	/// The emitted text is a session replacement; `origin`/`source` still describe the declaration.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub replacement: Option<PromptSectionReplacement>,
 }
 
 /// Which section or input produced which text of `systemPrompt`.
@@ -3266,6 +3279,9 @@ pub struct SystemPromptSources {
 	pub filter: PromptFilter,
 	/// Sections the filter removed (roots only).
 	pub excluded: Vec<PromptSectionRef>,
+	/// Session text replacements this build applied (section id -> replacement text); absent when none.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub overrides: Option<BTreeMap<String, String>>,
 }
 
 /// Displayable queue-chip text for pending user-authored messages; accepted verbatim by `remove_queued_message`.
@@ -5610,6 +5626,11 @@ pub struct SetPromptFilterParams {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetPromptOverridesParams {
+	pub overrides: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetMcpOverridesParams {
 	pub overrides: BTreeMap<String, bool>,
 }
@@ -6329,6 +6350,48 @@ impl PromptFilterMode {
 	}
 }
 
+/// The constant `"session"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct LitSession;
+
+impl Serialize for LitSession {
+	fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+		serializer.serialize_str("session")
+	}
+}
+
+impl<'de> Deserialize<'de> for LitSession {
+	fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+		let value = Value::deserialize(deserializer)?;
+		if value.as_str() == Some("session") {
+			Ok(Self)
+		} else {
+			Err(D::Error::custom(format!("expected \"session\", got {value}")))
+		}
+	}
+}
+
+/// The constant `"promptOverrides"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct LitPromptOverrides;
+
+impl Serialize for LitPromptOverrides {
+	fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+		serializer.serialize_str("promptOverrides")
+	}
+}
+
+impl<'de> Deserialize<'de> for LitPromptOverrides {
+	fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+		let value = Value::deserialize(deserializer)?;
+		if value.as_str() == Some("promptOverrides") {
+			Ok(Self)
+		} else {
+			Err(D::Error::custom(format!("expected \"promptOverrides\", got {value}")))
+		}
+	}
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum GoalModeStateMode {
 	#[serde(rename = "active")]
@@ -6821,6 +6884,23 @@ pub struct SetPromptFilterCommand {
 
 impl Command for SetPromptFilterCommand {
 	const NAME: &'static str = "set_prompt_filter";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = ();
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		let _ = data;
+		Ok(())
+	}
+}
+
+/// Replace the session's system prompt section text overrides, keyed by section id. The prompt is rebuilt, so the next `get_state` reflects them. An empty string is a deliberate empty replacement; an empty map restores the declared text.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetPromptOverridesCommand {
+	pub overrides: BTreeMap<String, String>,
+}
+
+impl Command for SetPromptOverridesCommand {
+	const NAME: &'static str = "set_prompt_overrides";
 	const TIMEOUT_MS: Option<u64> = None;
 	type Output = ();
 

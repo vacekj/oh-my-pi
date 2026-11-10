@@ -17,6 +17,11 @@ const MAX_TITLE = 100;
 const MAX_TEXT = 50_000;
 const MAX_FILTER_IDS = 1000;
 const MAX_ID = 2000;
+const MAX_OVERRIDES = 256;
+/** One replacement text, the bound prompt sections already use. */
+const MAX_OVERRIDE_ENTRY_TEXT = 50_000;
+/** Total size of every replacement text of one session. */
+const MAX_OVERRIDE_TEXT = 200_000;
 
 /** Accepts plain text, or `{ title, text }` with an optional `enabled` (default on). */
 export function parseSessionPromptSections(value: unknown): SessionPromptSection[] {
@@ -61,6 +66,37 @@ export function parsePromptFilter(value: unknown): PromptFilter {
 let sections = parseSessionPromptSections(JSON.parse(process.env.OMP_SESSION_PROMPT_SECTIONS ?? "[]"));
 export function setSessionPromptSections(value: unknown): void {
 	sections = parseSessionPromptSections(value);
+}
+
+/**
+ * Session text replacements by section id. An empty string is a deliberate
+ * replacement (the section renders empty); removing the entry restores the
+ * declared text. Each replacement is bounded like a prompt section.
+ */
+export function parsePromptOverrides(value: unknown): Record<string, string> {
+	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid prompt overrides");
+	const entries = Object.entries(value);
+	if (entries.length > MAX_OVERRIDES) throw new Error(`Use at most ${MAX_OVERRIDES} prompt overrides`);
+	let length = 0;
+	const result: Record<string, string> = {};
+	for (const [id, text] of entries) {
+		if (typeof text !== "string") throw new Error("Invalid prompt override");
+		if (!id || id.length > MAX_ID) throw new Error("Invalid prompt override id");
+		if (text.length > MAX_OVERRIDE_ENTRY_TEXT) throw new Error("Prompt override is too large");
+		length += text.length;
+		result[id] = text;
+	}
+	if (length > MAX_OVERRIDE_TEXT) throw new Error("Prompt overrides are too large");
+	return result;
+}
+
+let overrides = parsePromptOverrides(JSON.parse(process.env.OMP_SESSION_PROMPT_OVERRIDES ?? "{}"));
+export function getSessionPromptOverrides(): Readonly<Record<string, string>> {
+	return { ...overrides };
+}
+export function setSessionPromptOverrides(value: unknown): Record<string, string> {
+	overrides = parsePromptOverrides(value);
+	return { ...overrides };
 }
 
 let filter: PromptFilter = process.env.OMP_SESSION_PROMPT_FILTER

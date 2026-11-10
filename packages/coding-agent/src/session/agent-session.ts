@@ -518,6 +518,7 @@ import {
 	getSessionPromptBlocks,
 	isSessionPromptSectionDropped,
 	setSessionPromptFilter,
+	setSessionPromptOverrides,
 } from "./prompt-sections";
 import { resolveWebsocketPreference } from "./settings-stream-fn";
 import type { ShakeMode, ShakeResult } from "./shake-types";
@@ -7424,6 +7425,17 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 */
 	async setPromptFilter(filter: PromptFilter): Promise<void> {
 		setSessionPromptFilter(filter);
+		await this.refreshBaseSystemPrompt();
+	}
+
+	/**
+	 * Replaces this session's section text overrides and rebuilds the base
+	 * prompt, so {@link systemPromptSources} reflects them at once. An empty map
+	 * restores every declared section text; an empty string is a deliberate
+	 * empty replacement, not a reset.
+	 */
+	async setPromptOverrides(overrides: Record<string, string>): Promise<void> {
+		setSessionPromptOverrides(overrides);
 		await this.refreshBaseSystemPrompt();
 	}
 

@@ -164,6 +164,17 @@
 				"clientOmit": []
 			},
 			{
+				"name": "set_prompt_overrides",
+				"doc": "Replace the session's system prompt section text overrides, keyed by section id. The prompt is rebuilt, so the next `get_state` reflects them. An empty string is a deliberate empty replacement; an empty map restores the declared text.",
+				"params": "SetPromptOverridesParams",
+				"result": null,
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
 				"name": "set_mcp_overrides",
 				"doc": "Set process-local MCP switches without changing shared configuration.",
 				"params": "SetMcpOverridesParams",
@@ -2718,6 +2729,22 @@
 			],
 			"description": "Where a template section is declared."
 		},
+		"PromptSectionReplacement": {
+			"type": "object",
+			"properties": {
+				"kind": {
+					"const": "session"
+				},
+				"setting": {
+					"const": "promptOverrides"
+				}
+			},
+			"required": [
+				"kind",
+				"setting"
+			],
+			"description": "Why a section's emitted text is not the declaration's: a session text replacement (`promptOverrides`)."
+		},
 		"PromptSectionRef": {
 			"type": "object",
 			"properties": {
@@ -2752,6 +2779,10 @@
 				},
 				"source": {
 					"$ref": "#/$defs/SystemPromptSourceInfo"
+				},
+				"replacement": {
+					"$ref": "#/$defs/PromptSectionReplacement",
+					"description": "The emitted text is a session replacement; `origin`/`source` still describe the declaration."
 				}
 			},
 			"required": [
@@ -2819,6 +2850,10 @@
 				"source": {
 					"$ref": "#/$defs/SystemPromptSourceInfo",
 					"description": "Inputs only: the same info as the matching `sources` entry."
+				},
+				"replacement": {
+					"$ref": "#/$defs/PromptSectionReplacement",
+					"description": "The emitted text is a session replacement; `origin`/`source` still describe the declaration."
 				}
 			},
 			"required": [
@@ -2887,6 +2922,14 @@
 						"$ref": "#/$defs/PromptSectionRef"
 					},
 					"description": "Sections the filter removed (roots only)."
+				},
+				"overrides": {
+					"type": "object",
+					"properties": {},
+					"additionalProperties": {
+						"type": "string"
+					},
+					"description": "Session text replacements this build applied (section id -> replacement text); absent when none."
 				}
 			},
 			"required": [
@@ -6787,6 +6830,21 @@
 			},
 			"required": [
 				"filter"
+			]
+		},
+		"SetPromptOverridesParams": {
+			"type": "object",
+			"properties": {
+				"overrides": {
+					"type": "object",
+					"properties": {},
+					"additionalProperties": {
+						"type": "string"
+					}
+				}
+			},
+			"required": [
+				"overrides"
 			]
 		},
 		"SetMcpOverridesParams": {

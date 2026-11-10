@@ -96,6 +96,11 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 		params: { filter: "PromptFilter" },
 	},
 	{
+		name: "set_prompt_overrides",
+		doc: "Replace the session's system prompt section text overrides, keyed by section id. The prompt is rebuilt, so the next `get_state` reflects them. An empty string is a deliberate empty replacement; an empty map restores the declared text.",
+		params: { overrides: "Record<string, string>" },
+	},
+	{
 		name: "set_mcp_overrides",
 		doc: "Set process-local MCP switches without changing shared configuration.",
 		params: { overrides: "Record<string, boolean>" },

@@ -67,6 +67,7 @@ export type RpcCommand =
 	| { id?: string; type: "set_mcp_overrides"; overrides: Record<string, boolean> }
 	| { id?: string; type: "set_prompt_sections"; sections: Array<string | { title: string; text: string }> }
 	| { id?: string; type: "set_prompt_filter"; filter: PromptFilter }
+	| { id?: string; type: "set_prompt_overrides"; overrides: Record<string, string> }
 	| { id?: string; type: "set_fast_mode"; enabled: boolean }
 	| { id?: string; type: "set_slow_mode"; enabled: boolean }
 	| {
@@ -472,6 +473,7 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "set_mcp_overrides"; success: true }
 	| { id?: string; type: "response"; command: "set_prompt_sections"; success: true }
 	| { id?: string; type: "response"; command: "set_prompt_filter"; success: true }
+	| { id?: string; type: "response"; command: "set_prompt_overrides"; success: true }
 	| {
 			id?: string;
 			type: "response";
