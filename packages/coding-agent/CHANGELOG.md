@@ -8,6 +8,7 @@
 
 ### Changed
 
+- Local test commands keep bounded parallel execution in agent shells that set `CI=true`, and session tests no longer inherit the host agent's strict session-lock policy.
 - Agent `bash` commands run with `LANG`/`LC_ALL=C.UTF-8` on every platform instead of the inherited locale, so sort order, number formats and tool messages no longer vary by machine; a locale in the command's `env` or `.envrc` still wins, and `!` commands keep yours
 - omp's built-in shell (`omp bash`/`omp zsh` and the bash tool) parses scripts about a third faster, sources large function libraries about 20% faster, and re-runs a repeated `eval` or `source` without recompiling it.
 
