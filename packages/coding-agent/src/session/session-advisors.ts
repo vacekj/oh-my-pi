@@ -482,6 +482,8 @@ export interface SessionAdvisorsHost {
 	agent: Agent;
 	sessionManager: SessionManager;
 	settings: Settings;
+	/** Session-local role assignments; advisor model/role resolution goes through it. */
+	modelRoleSettings: Settings;
 	modelRegistry: ModelRegistry;
 	yieldQueue: YieldQueue;
 	obfuscator(): SecretObfuscator | undefined;
@@ -1164,7 +1166,11 @@ export class SessionAdvisors {
 			// then tracks whatever the primary turn's classifier resolved to.
 			let autoThinking = false;
 			if (config.model) {
-				const resolved = resolveModelOverride([config.model], this.#host.modelRegistry, this.#host.settings);
+				const resolved = resolveModelOverride(
+					[config.model],
+					this.#host.modelRegistry,
+					this.#host.modelRoleSettings,
+				);
 				model = resolved.model;
 				autoThinking = resolved.thinkingLevel === AUTO_THINKING;
 				thinkingLevel = concreteThinkingLevel(resolved.thinkingLevel);
@@ -1180,7 +1186,10 @@ export class SessionAdvisors {
 					continue;
 				}
 			} else {
-				const sel = resolveAdvisorRoleSelection(this.#host.settings, this.#host.modelRegistry.getAvailable());
+				const sel = resolveAdvisorRoleSelection(
+					this.#host.modelRoleSettings,
+					this.#host.modelRegistry.getAvailable(),
+				);
 				if (!sel) {
 					this.#advisorStatuses.set(slug, { name: config.name, status: "no_model" });
 					if (emitWarnings) {
@@ -2056,7 +2065,7 @@ export class SessionAdvisors {
 		const resolvedPrimary = resolveModelOverride(
 			[originalSelector.raw],
 			this.#host.modelRegistry,
-			this.#host.settings,
+			this.#host.modelRoleSettings,
 		);
 		const primaryModel =
 			resolvedPrimary.model ?? this.#host.modelRegistry.find(originalSelector.provider, originalSelector.id);
@@ -2215,7 +2224,11 @@ export class SessionAdvisors {
 		for (const role of chainKeys) {
 			for (const selector of this.#host.findRetryFallbackCandidates(role, currentSelector, currentModel)) {
 				if (this.#host.isRetryFallbackSelectorSuppressed(selector)) continue;
-				const resolved = resolveModelOverride([selector.raw], this.#host.modelRegistry, this.#host.settings);
+				const resolved = resolveModelOverride(
+					[selector.raw],
+					this.#host.modelRegistry,
+					this.#host.modelRoleSettings,
+				);
 				const candidate = resolved.model ?? this.#host.modelRegistry.find(selector.provider, selector.id);
 				if (!candidate || modelsAreEqual(candidate, currentModel)) continue;
 				if (!this.#canReplayAdvisorHistory(advisor, candidate)) continue;

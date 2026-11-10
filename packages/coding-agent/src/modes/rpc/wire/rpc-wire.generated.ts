@@ -632,6 +632,10 @@ export type UsageLimitState = UsageLimitLowPriority | UsageLimitWrapUp;
 export interface SessionState {
 	sessionId: string;
 	model?: ModelInfo;
+	/** Effective role selectors: session-local assignments over configuration. */
+	modelRoles?: Record<string, string>;
+	/** This session's local role assignments (empty when none). */
+	modelRoleOverrides?: Record<string, string>;
 	thinkingLevel?: ThinkingLevel;
 	isStreaming?: boolean;
 	isCompacting?: boolean;
@@ -1749,6 +1753,10 @@ export interface SetPromptOverridesParams {
 	overrides: Record<string, string>;
 }
 
+export interface SetModelRolesParams {
+	roles: Record<string, string>;
+}
+
 export interface SetMcpOverridesParams {
 	overrides: Record<string, boolean>;
 }
@@ -2094,6 +2102,7 @@ export interface RpcWireCommands {
 	set_prompt_sections: { params: SetPromptSectionsParams; result: undefined };
 	set_prompt_filter: { params: SetPromptFilterParams; result: undefined };
 	set_prompt_overrides: { params: SetPromptOverridesParams; result: undefined };
+	set_model_roles: { params: SetModelRolesParams; result: undefined };
 	set_mcp_overrides: { params: SetMcpOverridesParams; result: undefined };
 	set_fast_mode: { params: SetFastModeParams; result: FastModeResult };
 	set_slow_mode: { params: SetSlowModeParams; result: SetSlowModeResult };

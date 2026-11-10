@@ -89,6 +89,7 @@ async function createFixture(overrides?: Partial<Record<string, unknown>>): Prom
 			getCwd: () => agentDir,
 		},
 		settings,
+		modelRoleSettings: settings,
 		model,
 		modelRegistry,
 		refreshBaseSystemPrompt,

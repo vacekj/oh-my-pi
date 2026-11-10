@@ -295,12 +295,15 @@ function resolveTierCandidates(tier: CompletionTier, session: ToolSession): Comp
 	if (!retry.enabled || !retry.modelFallback) return candidates;
 	const primaryLevel = primary.configuredEffort === AUTO_THINKING ? undefined : primary.configuredEffort;
 	const inheritPrimary = shouldDisableReasoning(primaryLevel) || toReasoningEffort(primaryLevel) !== undefined;
+	// A caller may hold only the tool-session view, whose role accessor is
+	// optional; before the session exists it resolves roles from shared settings.
+	const roleSettings = session.modelRoleSettings ?? session.settings;
 
 	appendFallbackCandidates(
 		{
 			context: {
-				chains: getRetryFallbackChains(session.settings),
-				getModelRole: (role: string) => session.settings.getModelRole(role),
+				chains: getRetryFallbackChains(roleSettings),
+				getModelRole: (role: string) => roleSettings.getModelRole(role),
 				modelLookup: modelRegistry,
 			},
 			modelRegistry,

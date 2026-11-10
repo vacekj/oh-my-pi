@@ -150,6 +150,8 @@ export function serviceTierForModel(
 export interface ModelControlsHost {
 	agent: Agent;
 	settings: Settings;
+	/** Session-local role assignments; falls back to {@link settings} for everything else. */
+	modelRoleSettings: Settings;
 	modelRegistry: ModelRegistry;
 	sessionManager: SessionManager;
 	providerSessionState: Map<string, ProviderSessionState>;
@@ -291,16 +293,25 @@ export class ModelControls {
 		this.#serviceTierByFamily = tiers;
 	}
 	resolveRoleModel(role: string): Model | undefined {
-		return resolveRoleModelFull(this.#host.settings, role, this.#host.modelRegistry.getAvailable(), this.#model)
-			.model;
+		return resolveRoleModelFull(
+			this.#host.modelRoleSettings,
+			role,
+			this.#host.modelRegistry.getAvailable(),
+			this.#model,
+		).model;
 	}
 
 	resolveRoleModelWithThinking(role: string): ResolvedModelRoleValue {
-		return resolveRoleModelFull(this.#host.settings, role, this.#host.modelRegistry.getAvailable(), this.#model);
+		return resolveRoleModelFull(
+			this.#host.modelRoleSettings,
+			role,
+			this.#host.modelRegistry.getAvailable(),
+			this.#model,
+		);
 	}
 
 	resolveTemporaryModelThinkingLevel(model: Model): ConfiguredThinkingLevel | undefined {
-		return roleThinkingLevelForModel(this.#host.settings, this.#host.modelRegistry.getAvailable(), model);
+		return roleThinkingLevelForModel(this.#host.modelRoleSettings, this.#host.modelRegistry.getAvailable(), model);
 	}
 
 	async setModel(
@@ -411,7 +422,7 @@ export class ModelControls {
 		const availableModels = this.#host.modelRegistry.getAvailable();
 		if (availableModels.length === 0 || !this.#model) return undefined;
 		return resolveRoleModelCycle(
-			this.#host.settings,
+			this.#host.modelRoleSettings,
 			availableModels,
 			this.#model,
 			this.#host.sessionManager.getLastModelChangeRole(),

@@ -889,7 +889,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				cfgTaskFile.get(this.session.settings),
 				this.#defaultAgent(),
 				this.#seanceSchemaFields() !== undefined,
-				this.session.settings,
+				this.session.modelRoleSettings ?? this.session.settings,
 			);
 			return typeof plan === "string" ? undefined : plan.spawns;
 		},
@@ -1191,7 +1191,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			cfgTaskFile.get(this.session.settings),
 			defaultAgent,
 			this.#seanceSchemaFields() !== undefined,
-			this.session.settings,
+			this.session.modelRoleSettings ?? this.session.settings,
 		);
 		if (typeof plan === "string") {
 			return createTaskModeError(plan);

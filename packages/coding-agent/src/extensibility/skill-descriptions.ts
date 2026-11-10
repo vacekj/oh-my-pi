@@ -62,19 +62,19 @@ export function createSkillDescriptionCompressor(
 		sessionId?: string;
 		getTelemetry?: () => AgentTelemetry | undefined;
 		getCostGate?: () => CostGateApi | undefined;
+		/** Session-local settings to read roles from; defaults to `settings`. */
+		getSettings?: () => Settings;
 	} = {},
 ): SkillDescriptionCompressor {
 	const select = (): Model<Api> | undefined => {
+		const current = options.getSettings?.() ?? settings;
 		// The first exact provider/id match wins before every other matching phase.
 		// Resolve only that provider when possible: rendering uncached skill hints
 		// must not expand unrelated account catalogs for every background request.
 		// On a miss, use the complete pool below. A slash can instead belong to a
 		// raw aggregator id, and suffixes, aliases and fallbacks still need the
 		// ordinary resolver's full precedence rules.
-		const firstPattern = resolveConfiguredModelPatterns(
-			settings.getModelRole("smol")?.trim() || "@smol",
-			settings,
-		)[0];
+		const firstPattern = resolveConfiguredModelPatterns(current.getModelRole("smol")?.trim() || "@smol", current)[0];
 		const slash = firstPattern?.indexOf("/") ?? -1;
 		if (firstPattern && slash > 0) {
 			const provider = firstPattern.slice(0, slash).trim();
@@ -87,8 +87,8 @@ export function createSkillDescriptionCompressor(
 		}
 		const available = registry.getAvailable();
 		return (
-			resolveRoleChain("smol", settings, available)[0]?.model ??
-			resolveRoleSelection(["tiny"], settings, available)?.model
+			resolveRoleChain("smol", current, available)[0]?.model ??
+			resolveRoleSelection(["tiny"], current, available)?.model
 		);
 	};
 	return {

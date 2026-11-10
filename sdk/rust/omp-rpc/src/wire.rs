@@ -3427,6 +3427,12 @@ pub struct SessionState {
 	pub session_id: String,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub model: Option<ModelInfo>,
+	/// Effective role selectors: session-local assignments over configuration.
+	#[serde(rename = "modelRoles", default, skip_serializing_if = "Option::is_none")]
+	pub model_roles: Option<BTreeMap<String, String>>,
+	/// This session's local role assignments (empty when none).
+	#[serde(rename = "modelRoleOverrides", default, skip_serializing_if = "Option::is_none")]
+	pub model_role_overrides: Option<BTreeMap<String, String>>,
 	#[serde(rename = "thinkingLevel", default, skip_serializing_if = "Option::is_none")]
 	pub thinking_level: Option<ThinkingLevel>,
 	#[serde(rename = "isStreaming", default = "default_session_state_is_streaming")]
@@ -5631,6 +5637,11 @@ pub struct SetPromptOverridesParams {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetModelRolesParams {
+	pub roles: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetMcpOverridesParams {
 	pub overrides: BTreeMap<String, bool>,
 }
@@ -6901,6 +6912,23 @@ pub struct SetPromptOverridesCommand {
 
 impl Command for SetPromptOverridesCommand {
 	const NAME: &'static str = "set_prompt_overrides";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = ();
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		let _ = data;
+		Ok(())
+	}
+}
+
+/// Replace the session-local model role assignments (role -> selector, including an optional reasoning suffix). An empty map clears them. Nothing is written to shared configuration and other sessions are unaffected.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetModelRolesCommand {
+	pub roles: BTreeMap<String, String>,
+}
+
+impl Command for SetModelRolesCommand {
+	const NAME: &'static str = "set_model_roles";
 	const TIMEOUT_MS: Option<u64> = None;
 	type Output = ();
 

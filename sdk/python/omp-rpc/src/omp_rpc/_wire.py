@@ -802,6 +802,10 @@ class UsageLimitWrapUp:
 class SessionState:
     session_id: str
     model: ModelInfo | None = None
+    model_roles: dict[str, str] | None = None
+    """Effective role selectors: session-local assignments over configuration."""
+    model_role_overrides: dict[str, str] | None = None
+    """This session's local role assignments (empty when none)."""
     thinking_level: ThinkingLevel | None = None
     is_streaming: bool = False
     is_compacting: bool = False
@@ -2321,6 +2325,8 @@ def parse_session_state(value: object, path: str = "SessionState") -> SessionSta
     return SessionState(
         session_id=required(payload, "sessionId", decode_str, path),
         model=optional(payload, "model", parse_model_info, path),
+        model_roles=optional(payload, "modelRoles", record(decode_str), path),
+        model_role_overrides=optional(payload, "modelRoleOverrides", record(decode_str), path),
         thinking_level=optional(payload, "thinkingLevel", _decode_thinking_level, path),
         is_streaming=defaulted(payload, "isStreaming", decode_bool, path, False),
         is_compacting=defaulted(payload, "isCompacting", decode_bool, path, False),
@@ -3690,6 +3696,12 @@ class WireClient:
         params: dict[str, object] = {}
         params["overrides"] = overrides
         self._command("set_prompt_overrides", params)
+
+    def set_model_roles(self, roles: dict[str, str]) -> None:
+        """Replace the session-local model role assignments (role -> selector, including an optional reasoning suffix). An empty map clears them. Nothing is written to shared configuration and other sessions are unaffected."""
+        params: dict[str, object] = {}
+        params["roles"] = roles
+        self._command("set_model_roles", params)
 
     def set_mcp_overrides(self, overrides: dict[str, bool]) -> None:
         """Set process-local MCP switches without changing shared configuration."""

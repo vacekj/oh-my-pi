@@ -68,6 +68,7 @@ export type RpcCommand =
 	| { id?: string; type: "set_prompt_sections"; sections: Array<string | { title: string; text: string }> }
 	| { id?: string; type: "set_prompt_filter"; filter: PromptFilter }
 	| { id?: string; type: "set_prompt_overrides"; overrides: Record<string, string> }
+	| { id?: string; type: "set_model_roles"; roles: Record<string, string> }
 	| { id?: string; type: "set_fast_mode"; enabled: boolean }
 	| { id?: string; type: "set_slow_mode"; enabled: boolean }
 	| {
@@ -177,6 +178,10 @@ export type RpcCommand =
 
 export interface RpcSessionState {
 	model?: Model;
+	/** Effective role selectors: session-local assignments over the shared configuration. */
+	modelRoles: Record<string, string>;
+	/** This session's local role assignments, as an RPC client sent them (empty when none). */
+	modelRoleOverrides: Record<string, string>;
 	thinkingLevel: ThinkingLevel | undefined;
 	isStreaming: boolean;
 	isCompacting: boolean;
@@ -474,6 +479,7 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "set_prompt_sections"; success: true }
 	| { id?: string; type: "response"; command: "set_prompt_filter"; success: true }
 	| { id?: string; type: "response"; command: "set_prompt_overrides"; success: true }
+	| { id?: string; type: "response"; command: "set_model_roles"; success: true }
 	| {
 			id?: string;
 			type: "response";

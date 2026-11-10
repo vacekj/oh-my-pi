@@ -101,6 +101,11 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 		params: { overrides: "Record<string, string>" },
 	},
 	{
+		name: "set_model_roles",
+		doc: "Replace the session-local model role assignments (role -> selector, including an optional reasoning suffix). An empty map clears them. Nothing is written to shared configuration and other sessions are unaffected.",
+		params: { roles: "Record<string, string>" },
+	},
+	{
 		name: "set_mcp_overrides",
 		doc: "Set process-local MCP switches without changing shared configuration.",
 		params: { overrides: "Record<string, boolean>" },

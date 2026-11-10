@@ -28,6 +28,7 @@ interface SessionLike {
 		getCwd: () => string;
 	};
 	settings: Settings;
+	modelRoleSettings: Settings;
 	model: Model;
 	modelRegistry: ModelRegistryLike;
 	refreshBaseSystemPrompt: () => Promise<undefined>;
@@ -112,6 +113,7 @@ describe("issue #846: phase1 stage1 failures must be logged", () => {
 				getCwd: () => agentDir,
 			},
 			settings,
+			modelRoleSettings: settings,
 			model,
 			modelRegistry,
 			refreshBaseSystemPrompt: vi.fn(async () => undefined),

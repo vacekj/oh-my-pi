@@ -223,6 +223,7 @@ describe("memories/storage", () => {
 				getCwd: () => PROJECT_CWD,
 			},
 			settings,
+			modelRoleSettings: settings,
 			model,
 			refreshBaseSystemPrompt: async () => settled.resolve(),
 		} as unknown as Parameters<typeof startMemoryStartupTask>[0]["session"];

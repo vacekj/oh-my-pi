@@ -2751,6 +2751,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				}
 			},
 			getArtifactManager: () => sessionManager.getArtifactManager(),
+			// Task and other subagent-spawning tools inherit this session's role
+			// assignments; the overlay reads through to `settings` for everything else.
+			get modelRoleSettings() {
+				return session ? session.modelRoleSettings : settings;
+			},
 			settings,
 			authStorage,
 			modelRegistry,
@@ -4212,6 +4217,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					agent
 						? resolveTelemetry(agent.telemetry, agent.sessionId)
 						: resolveTelemetry(options.telemetry, providerSessionId),
+				getSettings: () => (session ? session.modelRoleSettings : settings),
 			}),
 		});
 		// Instructions from MCP servers the host connects outside `mcpManager`

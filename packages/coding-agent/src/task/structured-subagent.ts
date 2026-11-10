@@ -618,7 +618,7 @@ export async function resolveEffectiveSubagentPolicy(
 		requestModel: preparedSeance?.modelPatterns ?? request.model,
 		settingsOverride: hasPreparedSeance ? undefined : agentModelOverrides[agentName],
 		agentModel: hasPreparedSeance ? undefined : effectiveAgent.model,
-		settings: request.session.settings,
+		settings: request.session.modelRoleSettings ?? request.session.settings,
 		activeModelPattern: parentActiveModelPattern,
 		fallbackModelPattern: hasPreparedSeance ? undefined : request.session.getModelString?.(),
 	};
@@ -842,7 +842,7 @@ function buildExecutorOptions(
 		onToolResult: request.onToolResult,
 		authStorage: session.authStorage,
 		modelRegistry: session.modelRegistry,
-		settings: session.settings,
+		settings: session.modelRoleSettings ?? session.settings,
 		asyncJobManager: session.asyncJobManager,
 		inheritedSessionAgents: session.getSessionAgents?.(),
 		mcpManager: enableMCP ? (session.mcpManager ?? MCPManager.instance()) : undefined,

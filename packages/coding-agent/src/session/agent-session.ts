@@ -520,6 +520,7 @@ import {
 	setSessionPromptFilter,
 	setSessionPromptOverrides,
 } from "./prompt-sections";
+import { parseSessionModelRoles, sessionModelRolesFromEnv } from "./model-roles";
 import { resolveWebsocketPreference } from "./settings-stream-fn";
 import type { ShakeMode, ShakeResult } from "./shake-types";
 import { ToolChoiceQueue } from "./tool-choice-queue";
@@ -1015,6 +1016,13 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
 	readonly settings: Settings;
+	/**
+	 * Session-local role assignments: an overlay of {@link settings} whose own
+	 * `modelRoles` override layer holds this session's map. Nothing shared is
+	 * written, so other sessions and `config.yml` are untouched.
+	 */
+	readonly #modelRoleSettings: Settings;
+	#modelRoleOverrides: Record<string, string> = {};
 	/** Session-start policy, independent of the selected project memory backend. */
 	readonly memoryEnabled: boolean;
 	#costGate: CostGateApi;
@@ -2184,6 +2192,20 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			}
 		}
 		this.settings = config.settings;
+		// Each session resolves roles through its own overlay: a `set_model_roles`
+		// RPC or `OMP_SESSION_MODEL_ROLES` changes only this session's view.
+		this.#modelRoleSettings = config.settings.overlay();
+		// Only a main session owns the launch env: a subagent inherits the live
+		// parent overlay through its settings chain, so seeding the launch map
+		// here would shadow later `set_model_roles` edits with stale values.
+		const initialModelRoles = (config.agentKind ?? "main") === "main" ? sessionModelRolesFromEnv() : {};
+		if (Object.keys(initialModelRoles).length > 0) {
+			// Apply before any advisor runtime is built (it resolves roles from this
+			// overlay below); `setModelRoles` reconciles advisors and is not usable
+			// until the constructor has created them.
+			this.#modelRoleOverrides = initialModelRoles;
+			cfgModelRoles.override(this.#modelRoleSettings, initialModelRoles);
+		}
 		this.#ownsCostGate = config.costGate === undefined;
 		this.#costGate = config.costGate ?? this.#createCostGate();
 		this.#skillDescriptions = config.skillDescriptions ?? new SkillDescriptionCatalog();
@@ -2318,6 +2340,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		const modelControlsHost: ModelControlsHost = {
 			agent: this.agent,
 			settings: this.settings,
+			modelRoleSettings: this.#modelRoleSettings,
 			modelRegistry: this.#modelRegistry,
 			sessionManager: this.sessionManager,
 			providerSessionState: this.#providerSessionState,
@@ -2849,6 +2872,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			agent: this.agent,
 			sessionManager: this.sessionManager,
 			settings: this.settings,
+			modelRoleSettings: this.#modelRoleSettings,
 			modelRegistry: this.#modelRegistry,
 			yieldQueue: this.yieldQueue,
 			obfuscator: () => this.#obfuscator,
@@ -3096,7 +3120,12 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		this.addDisposer(this.agent.onPauseChange(paused => this.#onAgentPauseChange(paused)));
 		// Re-evaluate append-only context mode when the setting changes at runtime.
 		cfgProviderAppendOnlyContext.listen(this, () => this.#syncAppendOnlyContext(this.model));
-		cfgModelRoles.listen(this, () => this.#advisors.reconcileModelRoles());
+		// Listen on the session overlay: a `set_model_roles` assignment must
+		// rebuild/reconcile the advisor, not only a shared-settings edit.
+		cfgModelRoles.listen(
+			{ settings: this.#modelRoleSettings, addDisposer: dispose => this.addDisposer(dispose) },
+			() => this.#advisors.reconcileModelRoles(),
+		);
 		// Re-derive the active model's effective context window when the
 		// extended-context setting flips at runtime, or a per-model compaction
 		// point moves past (or back inside) a standard window or is switched on/off: the registry
@@ -8362,6 +8391,42 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			},
 			options ? { deliverAs: options.deliverAs } : undefined,
 		);
+	}
+
+	/**
+	 * Replace this session's role assignments (`modelRoles`), as selector
+	 * strings including an optional reasoning suffix. An empty map clears the
+	 * local assignments so resolution falls back to the shared configuration.
+	 * Nothing is written to `config.yml` and no other session is affected.
+	 */
+	setModelRoles(roles: unknown): Record<string, string> {
+		const parsed = parseSessionModelRoles(roles);
+		this.#modelRoleOverrides = parsed;
+		if (Object.keys(parsed).length === 0) cfgModelRoles.clearOverride(this.#modelRoleSettings);
+		else cfgModelRoles.override(this.#modelRoleSettings, parsed);
+		// The setting listeners coalesce into a later microtask; reconcile now so
+		// a live advisor reflects the assignment by the time the call returns.
+		this.#advisors.reconcileModelRoles();
+		return { ...parsed };
+	}
+
+	/** Role assignments this session was given (its local map, not the resolved fallbacks). */
+	get modelRoleOverrides(): Record<string, string> {
+		return { ...this.#modelRoleOverrides };
+	}
+
+	/** Effective role selectors: local assignments over the shared configuration. */
+	get modelRoles(): Record<string, string> {
+		const roles: Record<string, string> = {};
+		for (const [role, selector] of Object.entries(this.#modelRoleSettings.getModelRoles())) {
+			if (selector !== undefined) roles[role] = selector;
+		}
+		return roles;
+	}
+
+	/** The session-local settings instance role consumers resolve through. */
+	get modelRoleSettings(): Settings {
+		return this.#modelRoleSettings;
 	}
 
 	resolveRoleModel(role: string): Model | undefined {

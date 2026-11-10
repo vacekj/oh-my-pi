@@ -175,6 +175,17 @@
 				"clientOmit": []
 			},
 			{
+				"name": "set_model_roles",
+				"doc": "Replace the session-local model role assignments (role -> selector, including an optional reasoning suffix). An empty map clears them. Nothing is written to shared configuration and other sessions are unaffected.",
+				"params": "SetModelRolesParams",
+				"result": null,
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
 				"name": "set_mcp_overrides",
 				"doc": "Set process-local MCP switches without changing shared configuration.",
 				"params": "SetMcpOverridesParams",
@@ -3157,6 +3168,22 @@
 				},
 				"model": {
 					"$ref": "#/$defs/ModelInfo"
+				},
+				"modelRoles": {
+					"type": "object",
+					"properties": {},
+					"additionalProperties": {
+						"type": "string"
+					},
+					"description": "Effective role selectors: session-local assignments over configuration."
+				},
+				"modelRoleOverrides": {
+					"type": "object",
+					"properties": {},
+					"additionalProperties": {
+						"type": "string"
+					},
+					"description": "This session's local role assignments (empty when none)."
 				},
 				"thinkingLevel": {
 					"$ref": "#/$defs/ThinkingLevel"
@@ -6845,6 +6872,21 @@
 			},
 			"required": [
 				"overrides"
+			]
+		},
+		"SetModelRolesParams": {
+			"type": "object",
+			"properties": {
+				"roles": {
+					"type": "object",
+					"properties": {},
+					"additionalProperties": {
+						"type": "string"
+					}
+				}
+			},
+			"required": [
+				"roles"
 			]
 		},
 		"SetMcpOverridesParams": {

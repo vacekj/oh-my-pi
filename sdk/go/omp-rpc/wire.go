@@ -3051,19 +3051,23 @@ func (v *UsageLimitState) decodeFrom(raw map[string]json.RawMessage) error {
 }
 
 type SessionState struct {
-	SessionID             string         `json:"sessionId"`
-	Model                 *ModelInfo     `json:"model,omitempty"`
-	ThinkingLevel         *ThinkingLevel `json:"thinkingLevel,omitempty"`
-	IsStreaming           bool           `json:"isStreaming"`
-	IsCompacting          bool           `json:"isCompacting"`
-	SteeringMode          QueueMode      `json:"steeringMode"`
-	FollowUpMode          QueueMode      `json:"followUpMode"`
-	InterruptMode         InterruptMode  `json:"interruptMode"`
-	SessionFile           *string        `json:"sessionFile,omitempty"`
-	SessionName           *string        `json:"sessionName,omitempty"`
-	AutoCompactionEnabled bool           `json:"autoCompactionEnabled"`
-	FastModeEnabled       bool           `json:"fastModeEnabled"`
-	FastModeActive        bool           `json:"fastModeActive"`
+	SessionID string     `json:"sessionId"`
+	Model     *ModelInfo `json:"model,omitempty"`
+	// Effective role selectors: session-local assignments over configuration.
+	ModelRoles map[string]string `json:"modelRoles,omitempty"`
+	// This session's local role assignments (empty when none).
+	ModelRoleOverrides    map[string]string `json:"modelRoleOverrides,omitempty"`
+	ThinkingLevel         *ThinkingLevel    `json:"thinkingLevel,omitempty"`
+	IsStreaming           bool              `json:"isStreaming"`
+	IsCompacting          bool              `json:"isCompacting"`
+	SteeringMode          QueueMode         `json:"steeringMode"`
+	FollowUpMode          QueueMode         `json:"followUpMode"`
+	InterruptMode         InterruptMode     `json:"interruptMode"`
+	SessionFile           *string           `json:"sessionFile,omitempty"`
+	SessionName           *string           `json:"sessionName,omitempty"`
+	AutoCompactionEnabled bool              `json:"autoCompactionEnabled"`
+	FastModeEnabled       bool              `json:"fastModeEnabled"`
+	FastModeActive        bool              `json:"fastModeActive"`
 	// `/slow` applies to the active model.
 	SlowModeSupported bool `json:"slowModeSupported"`
 	// `/slow` is on for the active model; always `false` when `slowModeSupported` is `false`.
@@ -3100,6 +3104,8 @@ func (v *SessionState) decodeFrom(raw map[string]json.RawMessage) error {
 	d := fieldDecoder{raw: raw, owner: "SessionState"}
 	d.required("sessionId", &out.SessionID)
 	d.optional("model", &out.Model)
+	d.optional("modelRoles", &out.ModelRoles)
+	d.optional("modelRoleOverrides", &out.ModelRoleOverrides)
 	d.optional("thinkingLevel", &out.ThinkingLevel)
 	d.defaulted("isStreaming", &out.IsStreaming, `false`)
 	d.defaulted("isCompacting", &out.IsCompacting, `false`)
@@ -8469,6 +8475,16 @@ type SetPromptOverridesCommand struct {
 // SetPromptOverrides sends "set_prompt_overrides": Replace the session's system prompt section text overrides, keyed by section id. The prompt is rebuilt, so the next `get_state` reflects them. An empty string is a deliberate empty replacement; an empty map restores the declared text.
 func (c Commands) SetPromptOverrides(ctx context.Context, p SetPromptOverridesCommand) error {
 	return c.call(ctx, "set_prompt_overrides", p, 0, nil)
+}
+
+// SetModelRolesCommand holds the parameters of "set_model_roles".
+type SetModelRolesCommand struct {
+	Roles map[string]string `json:"roles"`
+}
+
+// SetModelRoles sends "set_model_roles": Replace the session-local model role assignments (role -> selector, including an optional reasoning suffix). An empty map clears them. Nothing is written to shared configuration and other sessions are unaffected.
+func (c Commands) SetModelRoles(ctx context.Context, p SetModelRolesCommand) error {
+	return c.call(ctx, "set_model_roles", p, 0, nil)
 }
 
 // SetMcpOverridesCommand holds the parameters of "set_mcp_overrides".

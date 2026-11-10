@@ -243,6 +243,11 @@ export const stateDefs = {
 	),
 	SessionState: {
 		"model?": "ModelInfo",
+		"modelRoles?": doc(
+			"Record<string, string>",
+			"Effective role selectors: session-local assignments over configuration.",
+		),
+		"modelRoleOverrides?": doc("Record<string, string>", "This session's local role assignments (empty when none)."),
 		"thinkingLevel?": "ThinkingLevel",
 		isStreaming: absentAs("boolean", false),
 		isCompacting: absentAs("boolean", false),
