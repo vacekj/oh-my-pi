@@ -4,6 +4,7 @@ import {
 	type AgentMessage,
 	isSyntheticToolResultMessage,
 	type ThinkingLevel,
+	type StreamFn,
 } from "@oh-my-pi/pi-agent-core";
 import type {
 	AssistantMessage,
@@ -17,9 +18,20 @@ import type {
 	ToolChoice,
 	AnthropicFallbackCreditHandle,
 } from "@oh-my-pi/pi-ai";
-import { calculateRateLimitBackoffMs, isBillingCapUsageLimit, parseRateLimitReason } from "@oh-my-pi/pi-ai";
+import {
+	calculateRateLimitBackoffMs,
+	isBillingCapUsageLimit,
+	parseRateLimitReason,
+	streamSimple,
+} from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { shouldDropTruncatedThinkingOnlyAssistant } from "@oh-my-pi/pi-ai/providers/transform-messages";
+import {
+	copyCursorExecResolved,
+	getStreamingPartialJson,
+	setStreamingPartialJson,
+} from "@oh-my-pi/pi-ai/utils/block-symbols";
+import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { extractProviderRetryHint } from "@oh-my-pi/pi-ai/utils/retry-after";
 import { fallbackCreditTargets } from "@oh-my-pi/pi-catalog/compat/fallback-credit";
 import { resolveModelPolicy } from "@oh-my-pi/pi-catalog/compat/resolve";
@@ -390,6 +402,8 @@ export class TurnRecovery {
 	readonly #unexpectedStopJudgeTimeoutMs: number;
 	#retryAbortController: AbortController | undefined;
 	#retryAttempt = 0;
+	#recoveryDeadline: number | undefined;
+	#recoveryRetryCount = 0;
 	/**
 	 * Selectors a classifier refusal has already moved off in the current retry saga; see the walk
 	 * bound below. Cleared in `resolveRetry()`, which every end of a saga goes through (an answer,
@@ -455,6 +469,8 @@ export class TurnRecovery {
 	constructor(host: TurnRecoveryHost, options: TurnRecoveryOptions = {}) {
 		this.#host = host;
 		this.#unexpectedStopJudgeTimeoutMs = options.unexpectedStopJudgeTimeoutMs ?? UNEXPECTED_STOP_TIMEOUT_MS;
+		const streamFn = host.agent.streamFn ?? streamSimple;
+		host.agent.streamFn = (...args) => this.#streamWithRecoveryDeadline(streamFn, ...args);
 		if (options.initialRetryFallback) {
 			this.#activeRetryFallback = {
 				...options.initialRetryFallback,
@@ -464,6 +480,155 @@ export class TurnRecovery {
 			this.#markFallbackRouted();
 		}
 		if (!options.deferFallbackChainValidation) this.validateRetryFallbackChains();
+	}
+
+	#startRecoveryBudget(): void {
+		const retry = cfgRetry.get(this.#host.settings);
+		if (retry.enabled && retry.maxElapsedMs > 0) this.#recoveryDeadline ??= Date.now() + retry.maxElapsedMs;
+	}
+
+	#remainingRecoveryMs(): number {
+		return this.#recoveryDeadline === undefined ? Infinity : Math.max(0, this.#recoveryDeadline - Date.now());
+	}
+
+	/** Late credential/reset results cannot extend the source model's recovery window. */
+	async #awaitRecoveryOperation<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T | undefined> {
+		if (this.#recoveryDeadline === undefined) return operation;
+		const timer = new AbortController();
+		const waitSignal = signal ? AbortSignal.any([signal, timer.signal]) : timer.signal;
+		try {
+			return await Promise.race([
+				operation,
+				sleepLong(this.#remainingRecoveryMs(), waitSignal).then(() => undefined),
+			]);
+		} finally {
+			timer.abort();
+		}
+	}
+
+	/** The deadline cancels transport AND settles consumers even if a provider ignores abort. */
+	#streamWithRecoveryDeadline(
+		streamFn: StreamFn,
+		...[model, context, options]: Parameters<StreamFn>
+	): AssistantMessageEventStream | Promise<AssistantMessageEventStream> {
+		const retry = cfgRetry.get(this.#host.settings);
+		if (!retry.enabled || retry.maxElapsedMs <= 0) return streamFn(model, context, options);
+		const stream = new AssistantMessageEventStream();
+		const controller = new AbortController();
+		const signal = options?.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
+		let partial: AssistantMessage | undefined;
+		let timer: Timer | undefined;
+		let deadline = this.#recoveryDeadline;
+		const cancelled = Promise.withResolvers<undefined>();
+		const finish = (): void => {
+			clearTimeout(timer);
+			signal.removeEventListener("abort", onAbort);
+			stream.forwardLocalWorkFrom(undefined);
+		};
+		const onAbort = (): void => {
+			if (stream.done) return;
+			cancelled.resolve(undefined);
+			const timedOut = controller.signal.aborted && !options?.signal?.aborted;
+			const snapshot = partial ? structuredClone(partial) : undefined;
+			if (snapshot && partial) {
+				// structuredClone drops symbol keys. Preserve provider execution proof
+				// so an already-executed call cannot become an unexecuted retry candidate.
+				for (let index = 0; index < partial.content.length; index++) {
+					copyCursorExecResolved(snapshot.content[index], partial.content[index]);
+					const partialJson = getStreamingPartialJson(partial.content[index]);
+					if (partialJson !== undefined) setStreamingPartialJson(snapshot.content[index], partialJson);
+				}
+			}
+			const error: AssistantMessage = {
+				...(snapshot ?? {
+					role: "assistant" as const,
+					content: [],
+					api: model.api,
+					provider: model.provider,
+					model: model.id,
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					timestamp: Date.now(),
+				}),
+				stopReason: timedOut ? "error" : "aborted",
+				errorMessage: timedOut
+					? "Provider recovery timeout: retry.maxElapsedMs or retry.maxRetries exhausted"
+					: "Request was aborted",
+				errorId: AIError.create(timedOut ? AIError.Flag.Transient : AIError.Flag.Abort),
+			};
+			stream.push({ type: "error", reason: error.stopReason as "error" | "aborted", error });
+			stream.end(error);
+			finish();
+		};
+		signal.addEventListener("abort", onAbort, { once: true });
+		const armDeadline = (): void => {
+			clearTimeout(timer);
+			if (deadline === undefined || stream.done) return;
+			const remaining = deadline - Date.now();
+			if (remaining <= 0) controller.abort();
+			else timer = setTimeout(armDeadline, Math.min(remaining, 2_147_483_647));
+		};
+		const providerRetryWait = async (delayMs: number, waitSignal?: AbortSignal): Promise<void> => {
+			this.#startRecoveryBudget();
+			deadline = this.#recoveryDeadline;
+			if (this.#recoveryRetryCount >= retry.maxRetries || delayMs >= this.#remainingRecoveryMs()) {
+				this.#recoveryDeadline = Date.now();
+				controller.abort();
+			} else {
+				this.#recoveryRetryCount++;
+				armDeadline();
+			}
+			signal.throwIfAborted();
+			const retrySignal = waitSignal ? AbortSignal.any([signal, waitSignal]) : signal;
+			await (options?.providerRetryWait ?? sleepLong)(delayMs, retrySignal);
+			retrySignal.throwIfAborted();
+		};
+		armDeadline();
+		if (signal.aborted) onAbort();
+		if (!stream.done)
+			void (async () => {
+				try {
+					const source = await Promise.race([
+						streamFn(model, context, { ...options, signal, providerRetryWait }),
+						cancelled.promise,
+					]);
+					if (!source || stream.done) return;
+					stream.forwardLocalWorkFrom(source);
+					const iterator = source[Symbol.asyncIterator]();
+					while (!stream.done) {
+						const next = await Promise.race([iterator.next(), cancelled.promise]);
+						if (!next || next.done || stream.done) break;
+						const event = next.value;
+						if (event.type === "error") {
+							this.#startRecoveryBudget();
+						} else if (event.type === "done") {
+							this.#recoveryDeadline = undefined;
+						} else if ("partial" in event) {
+							partial = event.partial;
+						}
+						stream.push(event);
+						if (stream.done) break;
+					}
+					if (!stream.done) {
+						const result = await Promise.race([source.result(), cancelled.promise]);
+						if (result && !stream.done) stream.end(result);
+					}
+				} catch (error) {
+					if (!stream.done) {
+						this.#startRecoveryBudget();
+						stream.fail(error);
+					}
+				} finally {
+					finish();
+				}
+			})();
+		return stream;
 	}
 
 	/** Current automatic retry attempt. */
@@ -547,6 +712,8 @@ export class TurnRecovery {
 
 	/** Resets per-prompt recovery counters and terminal-stop acceptance. */
 	resetForNewPrompt(): void {
+		this.#recoveryDeadline = undefined;
+		this.#recoveryRetryCount = 0;
 		this.#emptyStopRetryCount = 0;
 		this.#unexpectedStopRetryCount = 0;
 		this.#malformedFunctionCallRetryCount = 0;
@@ -584,6 +751,8 @@ export class TurnRecovery {
 		if (!assistantTurnProducedOutput(message)) {
 			return;
 		}
+		this.#recoveryDeadline = undefined;
+		this.#recoveryRetryCount = 0;
 		// A turn that produced output is forward progress: later history growth is
 		// new, so the next exact full-replay body-read timeout gets its own single
 		// shake-and-retry. Back-to-back timeouts never reach this point, so the
@@ -828,6 +997,7 @@ export class TurnRecovery {
 		const id = this.#classifyRetryMessage(message);
 		const activeModel = this.#host.model();
 		if (!activeModel || !AIError.is(id, AIError.Flag.UsageLimit)) return false;
+		this.#startRecoveryBudget();
 
 		let recorded = this.#usageLimitOutcomes.get(message);
 		if (!recorded) {
@@ -835,26 +1005,25 @@ export class TurnRecovery {
 			const parsedRetryAfterMs = this.#parseRetryAfterMsFromError(errorMessage);
 			const retryAfterMs = parsedRetryAfterMs ?? calculateRateLimitBackoffMs(parseRateLimitReason(errorMessage));
 			recorded = (async (): Promise<UsageLimitOutcome> => {
-				const outcome = await this.#host.modelRegistry.authStorage.limits.markReached(
-					activeModel.provider,
-					this.#host.sessionId(),
-					{
+				const outcome = await this.#awaitRecoveryOperation(
+					this.#host.modelRegistry.authStorage.limits.markReached(activeModel.provider, this.#host.sessionId(), {
 						retryAfterMs,
 						// Provider-stated timing only when the error text parsed;
 						// the 30-minute fallback is a guess.
 						providerTimed: parsedRetryAfterMs !== undefined,
 						baseUrl: activeModel.baseUrl,
 						modelId: activeModel.id,
-					},
+					}),
+					this.#host.unexpectedStopAbortSignal?.(),
 				);
 				return {
-					switchedCredential: outcome.switched,
+					switchedCredential: outcome?.switched ?? false,
 					retryAfterMs,
-					retryAtMs: outcome.retryAtMs,
-					blockedUntilMs: outcome.blockedUntilMs,
-					priorBlockedUntilMs: outcome.priorBlockedUntilMs,
-					priorBlockedUntilTimed: outcome.priorBlockedUntilTimed,
-					reportResetAtMs: outcome.reportResetAtMs,
+					retryAtMs: outcome?.retryAtMs,
+					blockedUntilMs: outcome?.blockedUntilMs,
+					priorBlockedUntilMs: outcome?.priorBlockedUntilMs,
+					priorBlockedUntilTimed: outcome?.priorBlockedUntilTimed,
+					reportResetAtMs: outcome?.reportResetAtMs,
 				};
 			})();
 			this.#usageLimitOutcomes.set(message, recorded);
@@ -889,6 +1058,8 @@ export class TurnRecovery {
 
 	/** Resolve the pending retry promise; the saga is over, and so is its refusal walk. */
 	resolveRetry(): void {
+		this.#recoveryDeadline = undefined;
+		this.#recoveryRetryCount = 0;
 		this.#refusalWalkTried.clear();
 		this.#accountPolicyRotationsRemaining.clear();
 		if (this.#retryResolve) {
@@ -2670,6 +2841,8 @@ export class TurnRecovery {
 		// the model once and lets the base turn proceed.
 		if (!retrySettings.enabled && !options?.fireworksFastFallback) return false;
 		const classifierRefusal = this.isClassifierRefusal(message);
+		const boundedRecovery = retrySettings.maxElapsedMs > 0;
+		if (boundedRecovery) this.#startRecoveryBudget();
 
 		const generation = this.#host.promptGeneration();
 		this.#retryAttempt++;
@@ -2691,7 +2864,9 @@ export class TurnRecovery {
 		const maxRetries = this.#isBoundedThinkingStreamClose(message)
 			? Math.min(retrySettings.maxRetries, 1)
 			: retrySettings.maxRetries;
-		const retryBudgetExhausted = this.#retryAttempt > maxRetries;
+		let retryBudgetExhausted = boundedRecovery
+			? this.#recoveryRetryCount >= maxRetries || this.#remainingRecoveryMs() <= 0
+			: this.#retryAttempt > maxRetries;
 
 		const errorMessage = message.errorMessage || "Unknown error";
 		const id = this.#classifyRetryMessage(message);
@@ -2714,7 +2889,10 @@ export class TurnRecovery {
 		const parsedRetryAfterMs = this.#parseRetryAfterMsFromError(errorMessage);
 		let delayMs = staleOpenAIResponsesReplayError
 			? 0
-			: calculateRetryBackoffDelayMs(retrySettings.baseDelayMs, this.#retryAttempt);
+			: calculateRetryBackoffDelayMs(
+					retrySettings.baseDelayMs,
+					boundedRecovery ? this.#recoveryRetryCount + 1 : this.#retryAttempt,
+				);
 		// Transient rate/concurrency caps stay on the same credential, but must
 		// honor their reason-specific windows. The default exponential base
 		// (≈500ms, capped at 8s) otherwise re-hits the cap and burns the retry
@@ -2756,7 +2934,7 @@ export class TurnRecovery {
 		if (!staleOpenAIResponsesReplayError && recordedUsageLimitOutcome) {
 			const rotated = recordedUsageLimitOutcome.switchedCredential && !retryBudgetExhausted;
 			let restored = false;
-			if (!rotated) {
+			if (!rotated && !(boundedRecovery && retryBudgetExhausted)) {
 				const resetAbortController = new AbortController();
 				this.#retryAbortController?.abort();
 				this.#retryAbortController = resetAbortController;
@@ -2764,8 +2942,12 @@ export class TurnRecovery {
 				const unblockAtMs = parsedRetryAfterMs === undefined ? undefined : startedAtMs + parsedRetryAfterMs;
 				try {
 					for (let attempt = 0; ; attempt++) {
-						const result = await this.#host.maybeAutoRedeemReset(unblockAtMs);
+						const result = await this.#awaitRecoveryOperation(
+							this.#host.maybeAutoRedeemReset(unblockAtMs),
+							resetAbortController.signal,
+						);
 						resetAbortController.signal.throwIfAborted();
+						if (!result) break;
 						if (result.restored) {
 							restored = true;
 							break;
@@ -2780,6 +2962,7 @@ export class TurnRecovery {
 						);
 						if (retrySettings.maxDelayMs > 0 && Date.now() - startedAtMs + readDelayMs > retrySettings.maxDelayMs)
 							break;
+						if (readDelayMs >= this.#remainingRecoveryMs()) break;
 						await sleepLong(readDelayMs, resetAbortController.signal);
 					}
 				} catch (error) {
@@ -2863,7 +3046,7 @@ export class TurnRecovery {
 		const currentSelector = currentModel
 			? formatRetryFallbackSelector(currentModel, this.#host.thinkingLevel())
 			: undefined;
-		if (accountPolicyDenial && currentModel) {
+		if (accountPolicyDenial && currentModel && !(boundedRecovery && retryBudgetExhausted)) {
 			const accountPolicyKey = `${currentModel.provider}/${currentModel.id}`;
 			const rotationsRemaining =
 				this.#accountPolicyRotationsRemaining.get(accountPolicyKey) ??
@@ -2876,14 +3059,17 @@ export class TurnRecovery {
 			this.#retryAbortController?.abort();
 			this.#retryAbortController = rotateAbortController;
 			try {
-				switchedCredential = (
-					await this.#host.modelRegistry.authStorage.limits.rotate(currentModel.provider, this.#host.sessionId(), {
+				const rotation = await this.#awaitRecoveryOperation(
+					this.#host.modelRegistry.authStorage.limits.rotate(currentModel.provider, this.#host.sessionId(), {
 						error: errorMessage,
 						modelId: currentModel.id,
 						signal: rotateAbortController.signal,
 						waitForSibling: rotationsRemaining > 0,
-					})
-				).switched;
+					}),
+					rotateAbortController.signal,
+				);
+				switchedCredential = rotation?.switched ?? false;
+				if (!rotation) rotateAbortController.abort();
 				// Rotation is advisory: expired blocks or a repeatedly offered sibling
 				// must not retry beyond one pool traversal in this saga.
 				switchedCredential &&= rotationsRemaining > 0;
@@ -2969,7 +3155,26 @@ export class TurnRecovery {
 			return maxDelayMs > 0 && waitMs > maxDelayMs && !waitForUsageReset;
 		};
 
-		if (!staleOpenAIResponsesReplayError && !switchedCredential && currentSelector) {
+		const requiredDelayMs = switchedCredential
+			? 0
+			: usageLimitWaitMs === undefined
+				? Math.max(delayMs, parsedRetryAfterMs ?? 0)
+				: delayMs;
+		if (boundedRecovery && requiredDelayMs >= this.#remainingRecoveryMs()) retryBudgetExhausted = true;
+		if (boundedRecovery && retryBudgetExhausted) switchedCredential = false;
+		const retryBeforeFallback =
+			boundedRecovery &&
+			!retryBudgetExhausted &&
+			!classifierRefusal &&
+			!accountPolicyDenial &&
+			this.isRetryableError(message) &&
+			!exceedsDelayCap(requiredDelayMs);
+
+		if (
+			(!staleOpenAIResponsesReplayError || (boundedRecovery && retryBudgetExhausted)) &&
+			!switchedCredential &&
+			currentSelector
+		) {
 			// The retry budget bounds same-model retries against a failing provider. A
 			// classifier refusal is not that: retrying the same model reproduces it, and
 			// the next model in the chain is one request away and often answers. Stopping
@@ -2987,9 +3192,10 @@ export class TurnRecovery {
 				allowModelFallback &&
 				retrySettings.modelFallback &&
 				retryFallbackAdmits(retrySettings.fallbackOn, AIError.is(id, AIError.Flag.UsageLimit)) &&
+				!retryBeforeFallback &&
 				!thinkingLoop &&
-				!sameModelSteerReplay &&
-				!waitForSiblingCredential &&
+				(!sameModelSteerReplay || (boundedRecovery && retryBudgetExhausted)) &&
+				(!waitForSiblingCredential || (boundedRecovery && retryBudgetExhausted)) &&
 				!refusalWalkRepeats &&
 				!this.#isFirstAttemptMidStreamSocketDrop(message, id, retryBudgetExhausted)
 			) {
@@ -3037,7 +3243,7 @@ export class TurnRecovery {
 			// of the role-fallback setting: it's intrinsic to the Fast contract (speed
 			// best-effort, degrade to Standard on failure) and triggers on hard router
 			// errors the generic retry classifier would otherwise reject.
-			if (!switchedModel && allowModelFallback && options?.fireworksFastFallback) {
+			if (!switchedModel && !retryBeforeFallback && allowModelFallback && options?.fireworksFastFallback) {
 				switchedModel = await this.#tryFireworksFastFallback(currentSelector);
 			}
 			if (switchedModel) {
@@ -3049,7 +3255,7 @@ export class TurnRecovery {
 
 		if (retryBudgetExhausted) {
 			if (!switchedModel && !switchedCredential) {
-				const attempt = this.#retryAttempt - 1;
+				const attempt = boundedRecovery ? this.#recoveryRetryCount : this.#retryAttempt - 1;
 				message.errorMessage = `Retry budget exhausted after ${attempt} ${attempt === 1 ? "retry" : "retries"}: ${errorMessage}`;
 				await this.#closeRetrySaga(
 					{ success: false, attempt, finalError: errorMessage },
@@ -3061,6 +3267,10 @@ export class TurnRecovery {
 			// instead keeps the cumulative attempt count while bypassing the
 			// same-route budget: every distinct account must be tried first.
 			if (switchedModel) this.#retryAttempt = 1;
+		}
+		if (boundedRecovery && switchedModel) {
+			this.#recoveryDeadline = undefined;
+			this.#recoveryRetryCount = 0;
 		}
 		if ((classifierRefusal || accountPolicyDenial) && !switchedCredential && !switchedModel) {
 			// A prior attempt in this saga already announced `auto_retry_start`
@@ -3156,9 +3366,12 @@ export class TurnRecovery {
 		this.#retryAbortController = retryAbortController;
 		try {
 			if (usageResetDeadline !== undefined) {
-				await sleepUntil(usageResetDeadline, retryAbortController.signal);
+				await sleepUntil(
+					Math.min(usageResetDeadline, this.#recoveryDeadline ?? Infinity),
+					retryAbortController.signal,
+				);
 			} else {
-				await sleepLong(delayMs, retryAbortController.signal);
+				await sleepLong(Math.min(delayMs, this.#remainingRecoveryMs()), retryAbortController.signal);
 			}
 		} catch {
 			if (this.#retryAbortController !== retryAbortController) {
@@ -3170,6 +3383,7 @@ export class TurnRecovery {
 		if (this.#retryAbortController === retryAbortController) {
 			this.#retryAbortController = undefined;
 		}
+		if (boundedRecovery && !switchedModel) this.#recoveryRetryCount++;
 
 		// The identity-keyed removal above can miss when a context rebuild
 		// recreated the failed turn's message object between settle and retry

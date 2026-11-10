@@ -612,6 +612,7 @@ const streamOllamaOnce = (
 					defaultDelayMs: OLLAMA_RETRY_DELAYS_MS,
 					shouldRetryResponse: shouldRetryOllamaResponse,
 					fetch: options.fetch,
+					wait: options.providerRetryWait,
 					timeout: false,
 				});
 			} finally {

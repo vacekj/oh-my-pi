@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Provider HTTP retries now honor the caller's shared recovery deadline and retry budget.
+
 ## [18.17.0] - 2026-11-06
 
 ### Added

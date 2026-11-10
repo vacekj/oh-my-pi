@@ -289,6 +289,8 @@ export interface FetchWithRetryOptions extends RequestInit {
 	 * `500ms * 2 ** attempt` capped at `maxDelayMs`.
 	 */
 	defaultDelayMs?: number | readonly number[] | ((attempt: number) => number);
+	/** Caller-owned retry wait; may reject when a shared recovery budget is exhausted. */
+	wait?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
 	/**
 	 * Optional per-attempt overlay merged into the base `RequestInit` each try.
 	 * Headers from the overlay shallow-merge over the base. Useful for auth
@@ -337,6 +339,7 @@ export async function fetchWithRetry(
 		maxAttempts = DEFAULT_MAX_ATTEMPTS,
 		maxDelayMs = DEFAULT_MAX_DELAY_MS,
 		defaultDelayMs,
+		wait = waitForRetry,
 		prepareInit,
 		shouldRetryResponse,
 		fetch: fetchImpl = fetch,
@@ -368,7 +371,7 @@ export async function fetchWithRetry(
 			if (signal?.aborted) throw new Error("Request was aborted");
 			const wrapped = wrapNetworkError(error);
 			if (attempt + 1 >= maxAttempts) throw wrapped;
-			await waitForRetry(resolveDefaultDelay(defaultDelayMs, attempt, maxDelayMs), signal);
+			await wait(resolveDefaultDelay(defaultDelayMs, attempt, maxDelayMs), signal);
 			continue;
 		}
 
@@ -384,7 +387,7 @@ export async function fetchWithRetry(
 		const delayMs = Math.min(hint ?? resolveDefaultDelay(defaultDelayMs, attempt, maxDelayMs), maxDelayMs);
 		// The retried response is discarded; release its unread tee branch.
 		if (!response.bodyUsed) response.body?.cancel().catch(() => {});
-		await waitForRetry(delayMs, signal);
+		await wait(delayMs, signal);
 	}
 }
 

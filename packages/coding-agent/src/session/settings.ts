@@ -754,6 +754,19 @@ export const cfgRetryMaxDelayMs = register({
 	},
 });
 
+export const cfgRetryMaxElapsedMs = register({
+	id: "retry.maxElapsedMs",
+	type: "number",
+	default: 0,
+	ui: {
+		tab: "model",
+		group: "Retry & Fallback",
+		label: "Total Recovery Time",
+		description:
+			"Total recovery budget in ms from the first provider error, including waits and in-flight retries. When enabled, retry before consulting model fallback; exhaustion switches to the configured fallback. 0 preserves the existing fallback-first policy. Each fallback gets a fresh budget.",
+	},
+});
+
 export const cfgRetryWaitForUsageReset = register({
 	id: "retry.waitForUsageReset",
 	type: "boolean",
@@ -925,6 +938,7 @@ export const cfgRetry = combine({
 	maxRetries: cfgRetryMaxRetries,
 	baseDelayMs: cfgRetryBaseDelayMs,
 	maxDelayMs: cfgRetryMaxDelayMs,
+	maxElapsedMs: cfgRetryMaxElapsedMs,
 	waitForUsageReset: cfgRetryWaitForUsageReset,
 	modelFallback: cfgRetryModelFallback,
 	fallbackOn: cfgRetryFallbackOn,

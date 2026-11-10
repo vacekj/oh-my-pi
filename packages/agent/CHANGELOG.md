@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Interrupted streams retain provider-executed tool calls even when no `toolcall_end` event arrived, preserving side-effect evidence so recovery cannot replay them as empty turns.
+
 ## [18.17.0] - 2026-11-06
 
 ### Added

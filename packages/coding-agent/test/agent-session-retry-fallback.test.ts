@@ -18,7 +18,9 @@ import {
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { CodexApiError } from "@oh-my-pi/pi-ai/providers/openai-codex/response-handler";
+import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import { buildParams } from "@oh-my-pi/pi-ai/providers/openai-responses";
+import { isCursorExecResolved, kCursorExecResolved } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
@@ -9204,5 +9206,583 @@ describe("AgentSession retry fallback", () => {
 
 		expect(requestedModels).toContain("openrouter/z-ai/glm-4.7@chutes");
 		expect(getLastAssistantMessage(session).stopReason).not.toBe("error");
+	});
+
+	describe("retry.maxElapsedMs", () => {
+		const transientError = "503 service unavailable: overloaded_error";
+		const primarySelector = "anthropic/claude-sonnet-4-5";
+		const fallbackSelector = "openai/gpt-4o-mini";
+		type RecoveryRequest = { selector: string; attempt: number; at: number; signal?: AbortSignal };
+
+		function createRecoveryHarness(
+			respond: (request: RecoveryRequest) => MockResponse | AssistantMessageEventStream,
+			overrides: Record<string, unknown> = {},
+			tools: AgentTool[] = [],
+		) {
+			const primary = getBundledModel("anthropic", "claude-sonnet-4-5");
+			if (!primary) throw new Error("Expected bundled primary model");
+			const requests: RecoveryRequest[] = [];
+			const mock = createMockModel();
+			const agent = new Agent({
+				getApiKey: model => `${model.provider}-test-key`,
+				initialState: { model: primary, systemPrompt: ["Test"], tools, messages: [] },
+				streamFn: (model, context, options) => {
+					const selector = `${model.provider}/${model.id}`;
+					const request = {
+						selector,
+						attempt: requests.filter(previous => previous.selector === selector).length + 1,
+						at: performance.now(),
+						signal: options?.signal,
+					};
+					requests.push(request);
+					const response = respond(request);
+					if (response instanceof AssistantMessageEventStream) return response;
+					mock.push(response);
+					return mock.stream(model, context, options);
+				},
+			});
+			const settings = Settings.isolated({
+				"compaction.enabled": false,
+				"retry.baseDelayMs": 5,
+				"retry.maxDelayMs": 60_000,
+				"retry.maxRetries": 3,
+				"retry.maxElapsedMs": 30_000,
+				"retry.fallbackChains": { default: [fallbackSelector] },
+				...overrides,
+			});
+			settings.setModelRole("default", primarySelector);
+			session = new AgentSession({
+				agent,
+				sessionManager: SessionManager.inMemory(),
+				settings,
+				modelRegistry,
+			});
+			return { live: session, settings, requests, ...trackRetryEvents(session) };
+		}
+
+		function useRecoveryClock() {
+			let now = 1_000_000;
+			vi.spyOn(Date, "now").mockImplementation(() => now);
+			vi.spyOn(performance, "now").mockImplementation(() => now);
+			const wait = vi.spyOn(scheduler, "wait").mockImplementation(async (delay, options) => {
+				options?.signal?.throwIfAborted();
+				now += delay;
+				options?.signal?.throwIfAborted();
+			});
+			return { wait, advance: (milliseconds: number) => (now += milliseconds) };
+		}
+
+		it.each([0, 30_000])("uses retry-before-fallback only when enabled (%i ms)", async maxElapsedMs => {
+			const { live, requests, retryEndEvents } = createRecoveryHarness(
+				({ selector }) => (selector === primarySelector ? { throw: transientError } : { content: ["Recovered"] }),
+				{ "retry.maxElapsedMs": maxElapsedMs },
+			);
+			useRecoveryClock();
+			await live.prompt("Recover within the configured budget");
+			await live.waitForIdle();
+
+			expect(requests.map(request => request.selector)).toEqual([
+				...Array.from({ length: maxElapsedMs === 0 ? 1 : 4 }, () => primarySelector),
+				fallbackSelector,
+			]);
+			expect(retryEndEvents.at(-1)).toMatchObject({ success: true });
+			expect(live.isRetrying).toBe(false);
+		});
+
+		it.each([0, 30_000])(
+			"reaches a default role whose only fallback duplicates its primary (%i ms)",
+			async maxElapsedMs => {
+				const { live, settings, requests } = createRecoveryHarness(
+					({ selector }) =>
+						selector === primarySelector ? { throw: transientError } : { content: ["Default recovered"] },
+					{ "retry.maxElapsedMs": maxElapsedMs },
+				);
+				// The live model predates a settings change: default and its sole fallback now name the same other model.
+				settings.setModelRole("default", fallbackSelector);
+				useRecoveryClock();
+				await live.prompt("Recover an existing session onto the new default");
+				await live.waitForIdle();
+
+				expect(requests.map(request => request.selector)).toEqual([
+					...Array.from({ length: maxElapsedMs === 0 ? 1 : 4 }, () => primarySelector),
+					fallbackSelector,
+				]);
+				expect(getLastAssistantMessage(live).stopReason).toBe("stop");
+			},
+		);
+
+		it("does not restart the elapsed budget for each provider wait", async () => {
+			const { live, requests } = createRecoveryHarness(({ selector }) =>
+				selector === primarySelector
+					? { throw: `${transientError} retry-after-ms=20000` }
+					: { content: ["Recovered before thirty seconds"] },
+			);
+			const { wait } = useRecoveryClock();
+			await live.prompt("Do not spend twenty seconds on every retry");
+			await live.waitForIdle();
+
+			expect(requests.map(request => request.selector)).toEqual([
+				primarySelector,
+				primarySelector,
+				fallbackSelector,
+			]);
+			expect(requests.at(-1)!.at - requests[0]!.at).toBeLessThanOrEqual(30_000);
+			expect(wait.mock.calls.reduce((total, [delay]) => total + delay, 0)).toBeLessThanOrEqual(30_000);
+		});
+
+		it("falls back without honoring a provider wait longer than the total budget", async () => {
+			const { live, requests } = createRecoveryHarness(({ selector }) =>
+				selector === primarySelector
+					? { throw: `${transientError} retry-after-ms=60000` }
+					: { content: ["Recovered without the long wait"] },
+			);
+			const { wait } = useRecoveryClock();
+			await live.prompt("Do not wait beyond the recovery deadline");
+			await live.waitForIdle();
+
+			expect(requests.map(request => request.selector)).toEqual([primarySelector, fallbackSelector]);
+			expect(wait.mock.calls.every(([delay]) => delay <= 30_000)).toBe(true);
+			expect(requests.at(-1)!.at - requests[0]!.at).toBeLessThanOrEqual(30_000);
+		});
+
+		it("aborts a stuck retry even when its provider never closes the stream", async () => {
+			let retrySignal: AbortSignal | undefined;
+			const { live, requests } = createRecoveryHarness(
+				({ selector, attempt, signal }) => {
+					if (selector !== primarySelector) return { content: ["Recovered from the hung stream"] };
+					if (attempt === 1) return { throw: transientError };
+					retrySignal = signal;
+					return new AssistantMessageEventStream();
+				},
+				{ "retry.maxElapsedMs": 100 },
+			);
+			await live.prompt("Bound a request that ignores cancellation");
+			await live.waitForIdle();
+
+			expect(requests.map(request => request.selector)).toEqual([
+				primarySelector,
+				primarySelector,
+				fallbackSelector,
+			]);
+			expect(retrySignal?.aborted).toBe(true);
+			// Allow scheduler overhead, but not the provider's unbounded request lifetime.
+			expect(requests.at(-1)!.at - requests[0]!.at).toBeLessThan(1_000);
+			expect(getLastAssistantMessage(live).stopReason).toBe("stop");
+		});
+
+		it("starts the deadline at the first error rather than the initial request", async () => {
+			const { live, requests } = createRecoveryHarness(
+				({ selector, attempt }) => {
+					if (selector !== primarySelector) return { content: ["Unexpected fallback"] };
+					return attempt === 1
+						? { throw: transientError, delayMs: 150 }
+						: { content: ["Recovered after a slow initial failure"] };
+				},
+				{ "retry.maxElapsedMs": 100 },
+			);
+			await live.prompt("Allow the initial request to run outside recovery");
+			await live.waitForIdle();
+
+			expect(requests.map(request => request.selector)).toEqual([primarySelector, primarySelector]);
+			expect(requests[1]!.at - requests[0]!.at).toBeGreaterThanOrEqual(100);
+			expect(getLastAssistantMessage(live).stopReason).toBe("stop");
+		});
+
+		it.each(["wait", "request"] as const)("cancels recovery during a %s without invoking fallback", async phase => {
+			const reached = Promise.withResolvers<void>();
+			const { live, requests } = createRecoveryHarness(({ attempt }) => {
+				if (attempt === 1) return { throw: transientError };
+				reached.resolve();
+				return { content: ["Must not be delivered"], delayMs: 60_000 };
+			});
+			if (phase === "wait") {
+				vi.spyOn(scheduler, "wait").mockImplementation((_delay, options) => {
+					reached.resolve();
+					const pending = Promise.withResolvers<void>();
+					options?.signal?.throwIfAborted();
+					options?.signal?.addEventListener("abort", () => pending.reject(options.signal?.reason), { once: true });
+					return pending.promise;
+				});
+			}
+			const prompt = live.prompt("Cancel recovery");
+			await reached.promise;
+			await live.abort();
+			await prompt;
+			await live.waitForIdle();
+
+			expect(requests.map(request => request.selector)).toEqual(
+				Array.from({ length: phase === "wait" ? 1 : 2 }, () => primarySelector),
+			);
+			expect(live.isRetrying).toBe(false);
+		});
+
+		it("clears elapsed and attempt budgets after success, including extension-triggered turns", async () => {
+			const { live, requests } = createRecoveryHarness(({ attempt }) =>
+				attempt % 4 === 0 ? { content: ["Recovered on the last allowed retry"] } : { throw: transientError },
+			);
+			const { advance } = useRecoveryClock();
+			await live.prompt("Use all three retries successfully");
+			await live.waitForIdle();
+			advance(60_000);
+			await live.sendCustomMessage(
+				{ customType: "recovery-budget-test", content: "Continue with a fresh recovery budget", display: false },
+				{ triggerTurn: true },
+			);
+			await live.waitForIdle();
+
+			expect(requests.map(request => request.selector)).toEqual(Array.from({ length: 8 }, () => primarySelector));
+			expect(getLastAssistantMessage(live).stopReason).toBe("stop");
+		});
+
+		it("gives the fallback its own elapsed and three-retry budgets", async () => {
+			const { live, requests } = createRecoveryHarness(({ selector, attempt }) => {
+				if (selector === primarySelector) return { throw: `${transientError} retry-after-ms=20000` };
+				return attempt === 4
+					? { content: ["Fallback recovered on its third retry"] }
+					: { throw: `${transientError} retry-after-ms=5000` };
+			});
+			useRecoveryClock();
+			await live.prompt("Exhaust primary time, then retry the fallback independently");
+			await live.waitForIdle();
+
+			expect(requests.map(request => request.selector)).toEqual([
+				primarySelector,
+				primarySelector,
+				...Array.from({ length: 4 }, () => fallbackSelector),
+			]);
+			expect(getLastAssistantMessage(live).stopReason).toBe("stop");
+		});
+
+		it.each<{
+			name: string;
+			sideEffect: AssistantMessage["content"][number] & { [kCursorExecResolved]?: true };
+		}>([
+			{
+				name: "an executed server tool",
+				sideEffect: {
+					type: "anthropicServerTool",
+					block: {
+						type: "server_tool_use",
+						id: "committed-server-tool",
+						name: "web_search",
+						input: { query: "status" },
+					},
+				},
+			},
+			{
+				name: "a provider-executed tool call",
+				sideEffect: {
+					type: "toolCall",
+					id: "committed-provider-tool",
+					name: "shell",
+					arguments: { command: "write-side-effect" },
+					[kCursorExecResolved]: true,
+				},
+			},
+		])("does not replay a timed-out retry after $name", async ({ sideEffect }) => {
+			const { live, requests } = createRecoveryHarness(
+				({ attempt }) => {
+					if (attempt === 1) return { throw: transientError };
+					const stream = new AssistantMessageEventStream();
+					queueMicrotask(() => {
+						stream.push({
+							type: "start",
+							partial: {
+								role: "assistant",
+								content: [sideEffect],
+								api: "anthropic-messages",
+								provider: "anthropic",
+								model: "claude-sonnet-4-5",
+								usage: emptyUsage(),
+								stopReason: "stop",
+								timestamp: Date.now(),
+							},
+						});
+					});
+					return stream;
+				},
+				{ "retry.maxElapsedMs": 100 },
+			);
+			await live.prompt("Do not replay the side effect when recovery times out");
+			await live.waitForIdle();
+
+			expect(requests.map(request => request.selector)).toEqual([primarySelector, primarySelector]);
+			expect(getLastAssistantMessage(live).content).toContainEqual(sideEffect);
+			if (sideEffect.type === "toolCall") {
+				const retained = getLastAssistantMessage(live).content.find(block => block.type === "toolCall");
+				expect(isCursorExecResolved(retained)).toBe(true);
+			}
+			expect(getLastAssistantMessage(live).stopReason).toBe("error");
+			expect(live.isRetrying).toBe(false);
+		});
+
+		it("preserves completed tool results instead of replaying side effects during bounded recovery", async () => {
+			let executions = 0;
+			const tool: AgentTool = {
+				name: "write_once",
+				label: "Write once",
+				description: "Record a side effect that must not be replayed",
+				parameters: type({}),
+				execute: async () => {
+					executions++;
+					return { content: [{ type: "text", text: "Side effect committed" }], details: {} };
+				},
+			};
+			const { live, requests } = createRecoveryHarness(
+				({ selector, attempt }) => {
+					if (selector !== primarySelector) return { content: ["Recovered after the completed tool"] };
+					if (attempt === 1) {
+						return { content: [{ type: "toolCall", id: "committed-write", name: tool.name, arguments: {} }] };
+					}
+					return { throw: transientError };
+				},
+				{},
+				[tool],
+			);
+			useRecoveryClock();
+			await live.prompt("Write once, then recover the failing follow-up request");
+			await live.waitForIdle();
+
+			expect(executions).toBe(1);
+			expect(requests.map(request => request.selector)).toEqual([
+				...Array.from({ length: 5 }, () => primarySelector),
+				fallbackSelector,
+			]);
+			expect(
+				live.messages.filter(message => message.role === "toolResult" && message.toolCallId === "committed-write"),
+			).toHaveLength(1);
+			expect(getLastAssistantMessage(live).stopReason).toBe("stop");
+		});
+
+		function createHttpRecoveryHarness(
+			respond: (attempt: number, signal: AbortSignal) => Response | Promise<Response>,
+			maxElapsedMs = 30_000,
+		) {
+			const primary = getBundledModel("openai", "gpt-4o-mini");
+			const fallback = getBundledModel("openai", "gpt-4o");
+			if (!primary || !fallback) throw new Error("Expected bundled OpenAI models");
+			const requests: Array<{ model: string; at: number }> = [];
+			const providerCalls: string[] = [];
+			let primaryRequests = 0;
+			const agent = new Agent({
+				getApiKey: () => "test-key",
+				initialState: { model: primary, systemPrompt: ["Test"], tools: [], messages: [] },
+				streamFn: (model, context, options) => {
+					providerCalls.push(model.id);
+					return streamOpenAICompletions(
+						buildModel<"openai-completions">({
+							...model,
+							api: "openai-completions",
+							compat: undefined,
+							remoteCompaction: undefined,
+							baseUrl: "https://recovery.test/v1",
+						}),
+						context,
+						{
+							...options,
+							apiKey: "test-key",
+							fetch: async (_input, init) => {
+								if (typeof init?.body !== "string" || !init.signal)
+									throw new Error("Expected a cancellable JSON request");
+								const body = JSON.parse(init.body) as { model: string };
+								requests.push({ model: body.model, at: performance.now() });
+								if (body.model === primary.id) return respond(++primaryRequests, init.signal);
+								const frame = {
+									id: "chatcmpl_recovered",
+									object: "chat.completion.chunk",
+									model: body.model,
+									choices: [
+										{
+											index: 0,
+											delta: { role: "assistant", content: "Recovered over HTTP" },
+											finish_reason: "stop",
+										},
+									],
+								};
+								return new Response(`data: ${JSON.stringify(frame)}\n\ndata: [DONE]\n\n`, {
+									headers: { "content-type": "text/event-stream" },
+								});
+							},
+						},
+					);
+				},
+			});
+			const settings = Settings.isolated({
+				"compaction.enabled": false,
+				"retry.baseDelayMs": 5,
+				"retry.maxDelayMs": 60_000,
+				"retry.maxRetries": 3,
+				"retry.maxElapsedMs": maxElapsedMs,
+				"retry.fallbackChains": { default: [`${fallback.provider}/${fallback.id}`] },
+			});
+			settings.setModelRole("default", `${primary.provider}/${primary.id}`);
+			session = new AgentSession({
+				agent,
+				sessionManager: SessionManager.inMemory(),
+				settings,
+				modelRegistry,
+			});
+			return { live: session, requests, providerCalls, primary, fallback };
+		}
+
+		function unavailableResponse(retryAfterSeconds: number): Response {
+			return new Response(JSON.stringify({ error: { type: "server_error", message: "Service unavailable" } }), {
+				status: 503,
+				headers: { "content-type": "application/json", "retry-after": String(retryAfterSeconds) },
+			});
+		}
+
+		it("counts real OpenAI HTTP transport retries toward the same three-retry cap", async () => {
+			const { live, requests, providerCalls, primary, fallback } = createHttpRecoveryHarness(() =>
+				unavailableResponse(0),
+			);
+			useRecoveryClock();
+			await live.prompt("Bound all HTTP requests, not just outer agent retries");
+			await live.waitForIdle();
+
+			expect(requests.map(request => request.model)).toEqual([
+				...Array.from({ length: 4 }, () => primary.id),
+				fallback.id,
+			]);
+			// Multiple wire requests occurred inside a provider call, exercising the actual HTTP retry layer.
+			expect(providerCalls.filter(id => id === primary.id).length).toBeLessThan(4);
+			expect(getLastAssistantMessage(live).content).toContainEqual({ type: "text", text: "Recovered over HTTP" });
+		});
+
+		it("shares the elapsed deadline with real OpenAI HTTP retry-after waits", async () => {
+			const { live, requests, primary, fallback } = createHttpRecoveryHarness(() => unavailableResponse(20));
+			useRecoveryClock();
+			await live.prompt("Count transport backoff against the total recovery deadline");
+			await live.waitForIdle();
+
+			expect(requests.map(request => request.model)).toEqual([primary.id, primary.id, fallback.id]);
+			expect(requests.at(-1)!.at - requests[0]!.at).toBeLessThanOrEqual(30_000);
+			expect(getLastAssistantMessage(live).stopReason).toBe("stop");
+		});
+
+		it("starts recovery on the first HTTP 503 and aborts a hung internal transport retry", async () => {
+			let firstFailureAt = 0;
+			let hangingSignal: AbortSignal | undefined;
+			const { live, requests, primary, fallback } = createHttpRecoveryHarness(async (attempt, signal) => {
+				if (attempt === 1) {
+					// The initial request is not recovery and may take longer than the recovery budget.
+					await scheduler.wait(150);
+					firstFailureAt = performance.now();
+					return unavailableResponse(0);
+				}
+				hangingSignal = signal;
+				const pending = Promise.withResolvers<Response>();
+				signal.throwIfAborted();
+				signal.addEventListener("abort", () => pending.reject(signal.reason), { once: true });
+				return pending.promise;
+			}, 100);
+			await live.prompt("Stop a hung internal request before any outer provider error is emitted");
+			await live.waitForIdle();
+
+			expect(requests.map(request => request.model)).toEqual([primary.id, primary.id, fallback.id]);
+			expect(firstFailureAt - requests[0]!.at).toBeGreaterThanOrEqual(100);
+			expect(requests.at(-1)!.at - firstFailureAt).toBeLessThan(1_000);
+			expect(hangingSignal?.aborted).toBe(true);
+			expect(getLastAssistantMessage(live).content).toContainEqual({ type: "text", text: "Recovered over HTTP" });
+		});
+
+		it("bounds recovery through the default Agent stream against a real HTTP server", async () => {
+			const provider = "recovery-deadline-local";
+			const requests: Array<{ model: string; at: number }> = [];
+			const hangingResponse = Promise.withResolvers<Response>();
+			let primaryRequests = 0;
+			let firstFailureAt = 0;
+			const server = Bun.serve({
+				hostname: "127.0.0.1",
+				port: 0,
+				async fetch(request) {
+					const body = (await request.json()) as { model: string };
+					requests.push({ model: body.model, at: performance.now() });
+					if (body.model === "primary") {
+						if (++primaryRequests > 1) return hangingResponse.promise;
+						await scheduler.wait(150);
+						firstFailureAt = performance.now();
+						return unavailableResponse(0);
+					}
+					const frame = {
+						id: "chatcmpl_default_stream_recovered",
+						object: "chat.completion.chunk",
+						model: body.model,
+						choices: [
+							{
+								index: 0,
+								delta: { role: "assistant", content: "Default stream recovered" },
+								finish_reason: "stop",
+							},
+						],
+					};
+					return new Response(`data: ${JSON.stringify(frame)}\n\ndata: [DONE]\n\n`, {
+						headers: { "content-type": "text/event-stream" },
+					});
+				},
+			});
+			try {
+				authStorage.keys.setRuntime(provider, "local-test-key");
+				modelRegistry.registerProvider(provider, {
+					api: "openai-completions",
+					apiKey: "local-test-key",
+					baseUrl: `http://127.0.0.1:${server.port}/v1`,
+					models: ["primary", "fallback"].map(id => ({
+						id,
+						name: id,
+						reasoning: false,
+						input: ["text" as const],
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+						contextWindow: 128_000,
+						maxTokens: 1_024,
+					})),
+				});
+				const primary = modelRegistry.find(provider, "primary");
+				if (!primary) throw new Error("Expected registered local primary");
+				// No streamFn override: this must exercise Agent's built-in streamSimple path, as the CLI does.
+				const agent = new Agent({
+					getApiKey: () => "local-test-key",
+					initialState: { model: primary, systemPrompt: ["Test"], tools: [], messages: [] },
+				});
+				const settings = Settings.isolated({
+					"compaction.enabled": false,
+					"retry.baseDelayMs": 5,
+					"retry.maxRetries": 3,
+					"retry.maxElapsedMs": 100,
+					"retry.fallbackChains": { default: [`${provider}/fallback`] },
+				});
+				settings.setModelRole("default", `${provider}/primary`);
+				session = new AgentSession({
+					agent,
+					sessionManager: SessionManager.inMemory(),
+					settings,
+					modelRegistry,
+				});
+				await withTimeout(
+					session.prompt("Recover using the ordinary provider path"),
+					2_000,
+					"Default stream recovery hung",
+				);
+				await withTimeout(session.waitForIdle(), 2_000, "Default stream recovery did not settle");
+
+				expect(requests.map(request => request.model)).toEqual(["primary", "primary", "fallback"]);
+				expect(firstFailureAt - requests[0]!.at).toBeGreaterThanOrEqual(100);
+				expect(requests.at(-1)!.at - firstFailureAt).toBeLessThan(1_000);
+				expect(getLastAssistantMessage(session).content).toContainEqual({
+					type: "text",
+					text: "Default stream recovered",
+				});
+				expect(session.isRetrying).toBe(false);
+			} finally {
+				hangingResponse.resolve(unavailableResponse(0));
+				if (session) {
+					await session.dispose();
+					session = undefined;
+				}
+				modelRegistry.unregisterProvider(provider);
+				authStorage.keys.removeRuntime(provider);
+				await server.stop(true);
+			}
+		});
 	});
 });
