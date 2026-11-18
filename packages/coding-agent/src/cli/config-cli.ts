@@ -8,6 +8,7 @@
 import { APP_NAME, getAgentDir, isRecord } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { orderedSettings } from "../config/all-settings";
+import { getKnownRoleIds } from "../config/model-roles";
 import { type AnySetting, lookup } from "../config/registry";
 import { Settings, settings } from "../config/settings";
 import { theme } from "@oh-my-pi/pi-tui/theme";
@@ -17,7 +18,7 @@ import { initXdg } from "./commands/init-xdg";
 // Types
 // =============================================================================
 
-export type ConfigAction = "list" | "get" | "set" | "reset" | "path" | "init-xdg";
+export type ConfigAction = "list" | "get" | "set" | "reset" | "path" | "init-xdg" | "model-roles";
 
 /** Layer `list --scope` reads as written: the agent dir's `config.yml`, or the project's settings files. */
 export type ConfigScope = "global" | "project";
@@ -68,7 +69,15 @@ function findSettingDef(path: string): CliSettingDef | undefined {
 // Argument Parser
 // =============================================================================
 
-const VALID_ACTIONS: ConfigAction[] = ["list", "get", "set", "reset", "path", "init-xdg"];
+export const CONFIG_ACTIONS: readonly ConfigAction[] = [
+	"list",
+	"get",
+	"set",
+	"reset",
+	"path",
+	"init-xdg",
+	"model-roles",
+];
 
 /**
  * Parse config subcommand arguments.
@@ -84,9 +93,9 @@ export function parseConfigArgs(args: string[]): ConfigCommandArgs | undefined {
 	}
 
 	const action = args[1];
-	if (!VALID_ACTIONS.includes(action as ConfigAction)) {
+	if (!CONFIG_ACTIONS.includes(action as ConfigAction)) {
 		console.error(chalk.red(`Unknown config command: ${action}`));
-		console.error(`Valid commands: ${VALID_ACTIONS.join(", ")}`);
+		console.error(`Valid commands: ${CONFIG_ACTIONS.join(", ")}`);
 		process.exit(1);
 	}
 
@@ -189,6 +198,14 @@ export async function runConfigCommand(cmd: ConfigCommandArgs): Promise<void> {
 		case "path":
 			handlePath();
 			break;
+		case "model-roles": {
+			const roleIds = getKnownRoleIds(settings);
+			const configured = settings.getGlobalSettings().modelRoles ?? {};
+			const effective = settings.getModelRoles();
+			if (cmd.flags.json) await writeStdout(`${JSON.stringify({ roleIds, configured, effective })}\n`);
+			else for (const id of roleIds) console.log(`${id}\t${effective[id] ?? "(inherited)"}`);
+			break;
+		}
 		case "init-xdg":
 			await initXdg();
 			break;

@@ -4,6 +4,7 @@
 
 ### Added
 
+- `omp config model-roles --json` reports known role IDs, global assignments, and effective selectors. `omp agents list --json` reports the native agent inventory and disabled state, with an optional `--workspace`.
 - A provider in `models.yml` can carry a hard monthly `budget` (`limitUsd`, `resetDay`, `reserveUsd`), such as the API credits included with a Claude Max plan: a request whose worst-case cost would exceed what is left is refused before it is sent, and `omp usage` shows the cycle's spend against the limit
 - Added `retry.maxElapsedMs` (default `0`, off) to cap provider recovery time from the first error, including backoff, provider-internal retries, and in-flight retry requests; when set, the session retries the current model before walking `retry.fallbackChains`, and each fallback model gets a fresh budget.
 - RPC `get_state` reports the system prompt as a tree of sections (`systemPromptSources.sections`): every template section is declared in its template with `{{#section}}` (id, title, template file and line range, enclosing conditionals), inputs keep their source, and session sections and the memory recall are listed too. Every block of the prompt is tiled by top-level sections.

@@ -9,10 +9,13 @@ import { getAgentDir, getProjectDir, isEnoent } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { YAML } from "bun";
 import { theme } from "@oh-my-pi/pi-tui/theme";
+import { Settings } from "../config/settings";
 import { loadBundledAgents } from "../task/agents";
+import { discoverAgents } from "../task/discovery";
+import { cfgTaskDisabledAgents } from "../task/settings";
 import type { AgentDefinition } from "../task/types";
 
-export type AgentsAction = "unpack";
+export type AgentsAction = "list" | "unpack";
 
 export interface AgentsCommandArgs {
 	action: AgentsAction;
@@ -22,6 +25,7 @@ export interface AgentsCommandArgs {
 		dir?: string;
 		user?: boolean;
 		project?: boolean;
+		workspace?: string;
 	};
 }
 
@@ -109,6 +113,18 @@ async function unpackBundledAgents(flags: AgentsCommandArgs["flags"]): Promise<U
 
 export async function runAgentsCommand(cmd: AgentsCommandArgs): Promise<void> {
 	switch (cmd.action) {
+		case "list": {
+			const cwd = cmd.flags.workspace ? path.resolve(getProjectDir(), cmd.flags.workspace) : getProjectDir();
+			const settings = await Settings.init({ cwd });
+			const { agents, projectAgentsDir } = await discoverAgents(cwd);
+			const disabled = new Set(cfgTaskDisabledAgents.get(settings));
+			const entries = agents.map(agent => ({ ...agent, enabled: !disabled.has(agent.name) }));
+			if (cmd.flags.json) writeStdout(JSON.stringify({ agents: entries, projectAgentsDir }));
+			else
+				for (const agent of entries)
+					writeStdout(`${agent.name}\t${agent.source}${agent.enabled ? "" : " (disabled)"}`);
+			return;
+		}
 		case "unpack": {
 			const result = await unpackBundledAgents(cmd.flags);
 			if (cmd.flags.json) {
