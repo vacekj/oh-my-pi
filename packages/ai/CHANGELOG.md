@@ -4,6 +4,7 @@
 
 ### Added
 
+- `serveAuthGatewayStdio` streams a reply when its request line sets `"stream": true`: a head line `{id, status, contentType}`, then `{id, chunk}` lines as the body arrives, then `{id, done: true}`. Without the flag replies stay one line.
 - Providers can be given a spend budget (`setProviderSpendBudgets`); every request to them is admitted against a cross-process ledger in `spend.db` and refused with `SpendBudgetExceededError` when its worst-case cost does not fit
 ### Fixed
 

@@ -51,6 +51,52 @@ export function selectorCandidates(
 	return [];
 }
 
+/**
+ * Resolves a request's model selector (`model`, or `modelId` on the pi-native
+ * stream route) to its candidates and routes each by its exact key until one
+ * answers; see {@link selectorCandidates}.
+ */
+export function stdioGatewayRoute(deps: {
+	route(req: Request): Promise<Response>;
+	routed: Map<string, Model<Api>>;
+	settings: Settings;
+	registry: Pick<ModelRegistry, "getAll" | "getAvailable">;
+}): (req: Request) => Promise<Response> {
+	const { routed, settings, registry } = deps;
+	return async (req: Request): Promise<Response> => {
+		// Unparseable bodies pass through for the route to reject in its own wire format.
+		const body: unknown = req.body
+			? await req
+					.clone()
+					.json()
+					.catch(() => undefined)
+			: undefined;
+		// Foreign wire formats name the model in `model`; the pi-native stream route in `modelId`.
+		const field = new URL(req.url).pathname === "/v1/pi/stream" ? "modelId" : "model";
+		if (!isRecord(body) || typeof body[field] !== "string") return deps.route(req);
+		const selector = body[field];
+		const candidates = selectorCandidates(selector, settings, registry);
+		let response = Response.json(
+			{ error: { message: `No available model matches "${selector}"`, type: "invalid_request_error" } },
+			{ status: 404 },
+		);
+		for (const model of candidates) {
+			const key = formatModelStringWithRouting(model);
+			routed.set(key, model);
+			const attempt = new Request(req.url, {
+				method: req.method,
+				headers: req.headers,
+				body: JSON.stringify({ ...body, [field]: key }),
+			});
+			response = await deps.route(attempt);
+			// 400 is the request's own fault and 499 its caller's: another model would fare no better.
+			if (response.status <= 400 || response.status === 499) return response;
+			logger.warn("auth-gateway stdio attempt failed", { selector, model: key, status: response.status });
+		}
+		return response;
+	};
+}
+
 /** Serves the gateway on stdin/stdout until stdin ends, then exits. */
 export async function runAuthGatewayStdio(): Promise<void> {
 	// Claimed before extension discovery so no in-process module can read the protocol's input.
@@ -70,36 +116,7 @@ export async function runAuthGatewayStdio(): Promise<void> {
 		resolveModel: id => routed.get(id),
 		listModels: () => registry.getAvailable(),
 	});
-	const route = async (req: Request): Promise<Response> => {
-		// Unparseable bodies pass through for the route to reject in its own wire format.
-		const body: unknown = req.body
-			? await req
-					.clone()
-					.json()
-					.catch(() => undefined)
-			: undefined;
-		if (!isRecord(body) || typeof body.model !== "string") return router.route(req, STDIO_PEER);
-		const selector = body.model;
-		const candidates = selectorCandidates(selector, settings, registry);
-		let response = Response.json(
-			{ error: { message: `No available model matches "${selector}"`, type: "invalid_request_error" } },
-			{ status: 404 },
-		);
-		for (const model of candidates) {
-			const key = formatModelStringWithRouting(model);
-			routed.set(key, model);
-			const attempt = new Request(req.url, {
-				method: req.method,
-				headers: req.headers,
-				body: JSON.stringify({ ...body, model: key }),
-			});
-			response = await router.route(attempt, STDIO_PEER);
-			// 400 is the request's own fault and 499 its caller's: another model would fare no better.
-			if (response.status <= 400 || response.status === 499) return response;
-			logger.warn("auth-gateway stdio attempt failed", { selector, model: key, status: response.status });
-		}
-		return response;
-	};
+	const route = stdioGatewayRoute({ route: req => router.route(req, STDIO_PEER), routed, settings, registry });
 
 	try {
 		await serveAuthGatewayStdio({ input, write: line => process.stdout.write(line), route, version: VERSION });

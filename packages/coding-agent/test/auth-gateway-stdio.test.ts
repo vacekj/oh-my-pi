@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import { selectorCandidates } from "@oh-my-pi/pi-coding-agent/cli/auth-gateway-stdio";
+import { selectorCandidates, stdioGatewayRoute } from "@oh-my-pi/pi-coding-agent/cli/auth-gateway-stdio";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { cfgRetryFallbackChains } from "@oh-my-pi/pi-coding-agent/session/settings";
 
@@ -84,5 +84,56 @@ describe("auth-gateway stdio model selectors", () => {
 
 	it("offers nothing when no entry resolves", () => {
 		expect(selectorCandidates("@commit", Settings.isolated({}), registry)).toEqual([]);
+	});
+});
+
+describe("auth-gateway stdio routing", () => {
+	const routeWith = () => {
+		const seen: Array<{ path: string; body: Record<string, unknown> }> = [];
+		const route = stdioGatewayRoute({
+			route: async req => {
+				seen.push({ path: new URL(req.url).pathname, body: (await req.json()) as Record<string, unknown> });
+				return Response.json({ ok: true });
+			},
+			routed: new Map(),
+			settings: Settings.isolated({}),
+			registry,
+		});
+		return { route, seen };
+	};
+
+	it("resolves the pi-native stream route's modelId", async () => {
+		const { route, seen } = routeWith();
+		const response = await route(
+			new Request("http://stdio/v1/pi/stream", {
+				method: "POST",
+				body: JSON.stringify({ modelId: key(fast), context: {} }),
+			}),
+		);
+		expect(response.status).toBe(200);
+		expect(seen).toEqual([{ path: "/v1/pi/stream", body: { modelId: key(fast), context: {} } }]);
+	});
+
+	it("resolves a foreign wire format's model", async () => {
+		const { route, seen } = routeWith();
+		await route(
+			new Request("http://stdio/v1/chat/completions", {
+				method: "POST",
+				body: JSON.stringify({ model: key(mini) }),
+			}),
+		);
+		expect(seen[0].body.model).toBe(key(mini));
+	});
+
+	it("answers 404 for a pi-native modelId that resolves to nothing", async () => {
+		const { route, seen } = routeWith();
+		const response = await route(
+			new Request("http://stdio/v1/pi/stream", {
+				method: "POST",
+				body: JSON.stringify({ modelId: "nope/missing" }),
+			}),
+		);
+		expect(response.status).toBe(404);
+		expect(seen).toEqual([]);
 	});
 });

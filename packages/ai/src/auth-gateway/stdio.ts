@@ -16,11 +16,24 @@
  * base64 with `"encoding": "base64"`. A line that is not a request answers
  * status 400 with the `id` it carried, if any. Serving ends once input ends
  * and every request has been answered.
+ *
+ * A request line with `"stream": true` gets its reply as it arrives instead:
+ * a head line `{"id", "status", "contentType"}`, then `{"id", "chunk"}` lines
+ * (text, or base64 with `"encoding": "base64"` for a binary body), then
+ * `{"id", "done": true}`. A parent relaying `/v1/pi/stream` (a sandboxed omp
+ * on the `pi-native` transport) uses it to forward tokens live.
  */
 import { logger, readLines } from "@oh-my-pi/pi-utils";
 
 /** Request ids are opaque to the transport: echoed back as received. */
 type StdioId = string | number;
+
+/** The head line of a streamed reply; chunk and done lines follow. */
+interface StdioStreamHead {
+	id: StdioId;
+	status: number;
+	contentType: string;
+}
 
 /** One response line. */
 interface StdioResponse {
@@ -64,9 +77,11 @@ export async function serveAuthGatewayStdio(opts: AuthGatewayStdioOptions): Prom
 		}
 		const answered = opts
 			.route(request.req)
-			.then(readResponse)
+			.then(response => (request.stream ? streamResponse(request.id, response, opts.write) : readResponse(response)))
 			.then(
-				response => send({ id: request.id, ...response }),
+				response => {
+					if (response) send({ id: request.id, ...response });
+				},
 				(error: unknown) => {
 					logger.error("auth-gateway stdio request failed", { error: String(error) });
 					send({
@@ -83,7 +98,9 @@ export async function serveAuthGatewayStdio(opts: AuthGatewayStdioOptions): Prom
 }
 
 /** A request line as a `Request`, or why it isn't one (with its `id` when it had a usable one). */
-function parseRequest(text: string): { id: StdioId; req: Request } | { id: StdioId | null; error: string } {
+function parseRequest(
+	text: string,
+): { id: StdioId; req: Request; stream: boolean } | { id: StdioId | null; error: string } {
 	let frame: unknown;
 	try {
 		frame = JSON.parse(text);
@@ -93,7 +110,7 @@ function parseRequest(text: string): { id: StdioId; req: Request } | { id: Stdio
 	if (typeof frame !== "object" || frame === null || Array.isArray(frame)) {
 		return { id: null, error: "A request is a JSON object" };
 	}
-	const { id, method, path, body } = frame as Record<string, unknown>;
+	const { id, method, path, body, stream } = frame as Record<string, unknown>;
 	if (typeof id !== "string" && typeof id !== "number") {
 		return { id: null, error: "`id` must be a string or a number" };
 	}
@@ -103,12 +120,15 @@ function parseRequest(text: string): { id: StdioId; req: Request } | { id: Stdio
 	if (method !== undefined && typeof method !== "string") {
 		return { id, error: "`method` must be a string" };
 	}
+	if (stream !== undefined && typeof stream !== "boolean") {
+		return { id, error: "`stream` must be a boolean" };
+	}
 	const init: RequestInit =
 		body === undefined
 			? { method: method ?? "GET" }
 			: { method: method ?? "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) };
 	try {
-		return { id, req: new Request(`${STDIO_ORIGIN}${path}`, init) };
+		return { id, req: new Request(`${STDIO_ORIGIN}${path}`, init), stream: stream === true };
 	} catch (error) {
 		return { id, error: error instanceof Error ? error.message : String(error) };
 	}
@@ -129,4 +149,29 @@ async function readResponse(response: Response): Promise<Omit<StdioResponse, "id
 	}
 	if (type.startsWith("text/")) return { status: response.status, body: new TextDecoder().decode(bytes) };
 	return { status: response.status, body: bytes.toBase64(), encoding: "base64" };
+}
+
+/** Writes a reply as it arrives: a head line, chunk lines, then a done line. Resolves to nothing to send. */
+async function streamResponse(id: StdioId, response: Response, write: (line: string) => void): Promise<undefined> {
+	const contentType = response.headers.get("content-type") ?? "";
+	const head: StdioStreamHead = { id, status: response.status, contentType };
+	write(`${JSON.stringify(head)}\n`);
+	const text = contentType.startsWith("text/") || contentType.includes("json");
+	const decoder = new TextDecoder();
+	if (response.body) {
+		for await (const bytes of response.body) {
+			if (text) {
+				const chunk = decoder.decode(bytes, { stream: true });
+				if (chunk) write(`${JSON.stringify({ id, chunk })}\n`);
+			} else {
+				write(`${JSON.stringify({ id, chunk: bytes.toBase64(), encoding: "base64" })}\n`);
+			}
+		}
+	}
+	if (text) {
+		const rest = decoder.decode();
+		if (rest) write(`${JSON.stringify({ id, chunk: rest })}\n`);
+	}
+	write(`${JSON.stringify({ id, done: true })}\n`);
+	return undefined;
 }

@@ -52,6 +52,45 @@ describe("auth-gateway stdio transport", () => {
 		}
 	});
 
+	it("streams a reply as head, chunk and done lines when the request asks for it", async () => {
+		registerMockApi();
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "gw-stdio-stream-"));
+		const storage = await AuthStorage.create(path.join(dir, "auth.db"));
+		storage.keys.setRuntime("openrouter", "test-key");
+		const mock = createMockModel({ provider: "openrouter", id: "mock/stream-model" });
+		const router = createAuthGatewayRouter({ storage, resolveModel: () => mock.model });
+		try {
+			mock.push({ content: ["streamed"] });
+			const request = {
+				id: 7,
+				stream: true,
+				path: "/v1/chat/completions",
+				body: { model: "mock/stream-model", stream: true, messages: [{ role: "user", content: "hi" }] },
+			};
+			const output = (await serve([JSON.stringify(request)], req => router.route(req, "test"))) as Array<
+				Record<string, unknown>
+			>;
+			expect(output[1]).toMatchObject({ id: 7, status: 200 });
+			expect(String(output[1].contentType)).toContain("text/event-stream");
+			const chunks = output.filter(line => typeof line.chunk === "string").map(line => line.chunk as string);
+			expect(chunks.length).toBeGreaterThan(0);
+			expect(chunks.join("")).toContain("streamed");
+			expect(output.at(-1)).toEqual({ id: 7, done: true });
+		} finally {
+			router.close();
+			storage.close();
+			await fs.rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects a non-boolean stream flag", async () => {
+		const output = await serve(
+			[JSON.stringify({ id: 1, stream: "yes", path: "/v1/models" })],
+			async () => new Response("{}"),
+		);
+		expect(output[1]).toMatchObject({ id: 1, status: 400 });
+	});
+
 	it("serves Apple chat without a stored credential while rejecting credential-required providers", async () => {
 		registerMockApi();
 		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "gw-stdio-keyless-"));
