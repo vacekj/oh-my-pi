@@ -85,6 +85,8 @@ interface ModelJson {
 	input: ("text" | "image")[];
 	cost: Model<Api>["cost"];
 	pricingStatus: ModelPricingStatus;
+	/** Where requests for the model go, when the catalog knows it. */
+	baseUrl: string | null;
 }
 
 interface ModelsJson {
@@ -129,6 +131,7 @@ function toModelJson(model: Model<Api>): ModelJson {
 		input: model.input,
 		cost: { ...model.cost, input, output, cacheRead, cacheWrite },
 		pricingStatus: getModelPricingStatus(model),
+		baseUrl: model.baseUrl ?? null,
 	};
 }
 
