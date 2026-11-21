@@ -297,6 +297,16 @@ export type ResolvedRequestAuth =
 	| { ok: false; error: string };
 
 /**
+ * The models config a registry reads when the caller names none: `OMP_MODELS_CONFIG` when set (a supervisor routing a
+ * sandboxed session's providers elsewhere without touching the user's file), else `<agent dir>/models.yml`. The model
+ * cache stays in the agent dir either way.
+ */
+export function defaultModelsConfigPath(): string {
+	const override = process.env.OMP_MODELS_CONFIG?.trim();
+	return override ? path.resolve(override) : path.join(getAgentDir(), "models.yml");
+}
+
+/**
  * Model registry - loads and manages models, resolves API keys via AuthStorage.
  */
 export class ModelRegistry {
@@ -639,7 +649,7 @@ export class ModelRegistry {
 			(isBunTestRuntime()
 				? () => Promise.reject(new Error("network disabled in model-registry runtime test"))
 				: wrapFetchForExtraCa(fetch));
-		this.#modelsConfigFile = ModelsConfigFile.relocate(modelsPath ?? path.join(getAgentDir(), "models.yml"));
+		this.#modelsConfigFile = ModelsConfigFile.relocate(modelsPath ?? defaultModelsConfigPath());
 		this.#cacheDbPath =
 			options?.cacheDbPath ?? (modelsPath ? path.join(path.dirname(modelsPath), "models.db") : undefined);
 		if (!this.#owner) this.authStorage.keys.setResolver(resolveConfigValue);

@@ -4,6 +4,7 @@
 
 ### Added
 
+- `OMP_MODELS_CONFIG` names a models config file to read instead of `<agent dir>/models.yml`; the model cache stays in the agent dir.
 - `omp models --json` rows carry `baseUrl`, the endpoint the model's requests go to (`null` when unknown).
 - `omp config model-roles --json` reports known role IDs, global assignments, and effective selectors. `omp agents list --json` reports the native agent inventory and disabled state, with an optional `--workspace`.
 - A provider in `models.yml` can carry a hard monthly `budget` (`limitUsd`, `resetDay`, `reserveUsd`), such as the API credits included with a Claude Max plan: a request whose worst-case cost would exceed what is left is refused before it is sent, and `omp usage` shows the cycle's spend against the limit

@@ -48,6 +48,43 @@ describe("ModelRegistry default custom models config", () => {
 		expect(model?.baseUrl).toBe("https://yaml-default.example.com/v1");
 	});
 
+	test("reads OMP_MODELS_CONFIG instead of the agent dir's models.yml when it is set", () => {
+		writeModelsYaml("models.yml", {
+			provider: "agent-dir-provider",
+			modelId: "agent-model",
+			modelName: "Agent dir model",
+			baseUrl: "https://agent-dir.example.com/v1",
+		});
+		const elsewhere = path.join(tempDir.path(), "elsewhere");
+		fs.mkdirSync(elsewhere);
+		fs.writeFileSync(
+			path.join(elsewhere, "routed.yml"),
+			[
+				"providers:",
+				"  routed-provider:",
+				"    baseUrl: http://127.0.0.1:47800",
+				"    apiKey: TEST_KEY",
+				"    api: anthropic-messages",
+				"    models:",
+				"      - id: routed-model",
+				"        name: Routed model",
+			].join("\n"),
+		);
+		const previous = process.env.OMP_MODELS_CONFIG;
+		process.env.OMP_MODELS_CONFIG = path.join(elsewhere, "routed.yml");
+		try {
+			const [routed, agentDir] = loadDefaultRegistryModels(
+				{ provider: "routed-provider", modelId: "routed-model" },
+				{ provider: "agent-dir-provider", modelId: "agent-model" },
+			);
+			expect(routed?.baseUrl).toBe("http://127.0.0.1:47800");
+			expect(agentDir).toBeUndefined();
+		} finally {
+			if (previous === undefined) delete process.env.OMP_MODELS_CONFIG;
+			else process.env.OMP_MODELS_CONFIG = previous;
+		}
+	});
+
 	test("retains STB decoder metadata on a renamed custom provider", () => {
 		writeModelsYaml("models.yml", {
 			provider: "managed-primary",
